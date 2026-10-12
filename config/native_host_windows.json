@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Windows native messaging host manifest for the MCP broker.",
+    "SETUP: Replace PLACEHOLDER_ABSOLUTE_PATH_TO_native_host.py with the absolute path to",
+    "       src\\mcp_gateway\\host\\native_host.py (or a .bat / .exe wrapper) on this machine.",
+    "       Replace PLACEHOLDER_EXTENSION_ID with the Extension ID shown in chrome://extensions.",
+    "INSTALL: Copy this file to a stable location, then add a registry key pointing to it:",
+    "       Registry key: HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.mcp.gemini.broker",
+    "       Key type: REG_SZ",
+    "       Key value: <absolute path to this JSON file>",
+    "       Command: reg add \"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.mcp.gemini.broker\"",
+    "                    /ve /t REG_SZ /d \"C:\\path\\to\\config\\native_host_windows.json\" /f",
+    "NOTE (Windows): 'path' must point to a .bat wrapper or python.exe invocation if using a .py script.",
+    "       type remains 'stdio' on all platforms."
+  ],
+  "name": "com.mcp.gemini.broker",
+  "description": "Google Gemini Notebook MCP Native Messaging Host",
+  "path": "PLACEHOLDER_ABSOLUTE_PATH_TO_native_host.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://PLACEHOLDER_EXTENSION_ID/"
+  ]
+}

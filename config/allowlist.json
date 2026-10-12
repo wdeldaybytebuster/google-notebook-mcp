@@ -1,0 +1,12 @@
+{
+  "_comment": {
+    "version": "Schema version — increment when fields are added or removed.",
+    "provider_mode": "Execution mode for the browser companion. 'browser' = Manifest V3 extension (default). Future: 'headless'.",
+    "accounts": "List of Google account email addresses permitted to access notebooks via MCP. Empty = all authenticated accounts.",
+    "notebooks": "List of notebook IDs explicitly allowlisted for MCP access. Empty = no notebooks allowed (deny-all default)."
+  },
+  "version": 1,
+  "provider_mode": "browser",
+  "accounts": [],
+  "notebooks": []
+}
