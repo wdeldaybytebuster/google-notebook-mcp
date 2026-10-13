@@ -42,6 +42,7 @@ def test_find_chrome_binary_respects_env_override(
     """CHROME_BINARY env var should be honoured by DedicatedBrowserLauncher._build_chrome_args."""
     fake_bin = tmp_path / "my-chrome"
     fake_bin.write_text("")
+    monkeypatch.delenv("CHROME_PATH", raising=False)
     monkeypatch.setenv("CHROME_BINARY", str(fake_bin))
 
     launcher = DedicatedBrowserLauncher(
@@ -63,6 +64,7 @@ def test_build_chrome_args_contains_required_flags(
     """Chrome args must include --load-extension and --user-data-dir."""
     fake_bin = tmp_path / "chrome"
     fake_bin.write_text("")
+    monkeypatch.delenv("CHROME_PATH", raising=False)
     monkeypatch.setenv("CHROME_BINARY", str(fake_bin))
 
     launcher = DedicatedBrowserLauncher(
@@ -87,6 +89,7 @@ def test_build_chrome_args_raises_when_no_binary(
 ) -> None:
     """RuntimeError raised when no Chrome binary is found and CHROME_BINARY is unset."""
     monkeypatch.delenv("CHROME_BINARY", raising=False)
+    monkeypatch.delenv("CHROME_PATH", raising=False)
     with patch("mcp_gateway.launcher.find_chrome_binary", return_value=None):
         launcher = DedicatedBrowserLauncher(
             extension_dir=tmp_path,

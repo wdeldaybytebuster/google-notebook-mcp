@@ -69,6 +69,28 @@ def find_chrome_binary() -> Optional[str]:
     return None
 
 
+def load_env_file(env_path: Path | None = None) -> None:
+    """Loads environment variables from a .env file if present and not already set."""
+    path = env_path or (Path.cwd() / ".env")
+    if not path.is_file():
+        path = Path(__file__).resolve().parent.parent.parent / ".env"
+    if path.is_file():
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip()
+                    if k not in os.environ:
+                        os.environ[k] = v
+        except Exception:
+            pass
+
+
+# Automatically load .env on import if available
+load_env_file()
+
+
 # ---------------------------------------------------------------------------
 # CDP auth check
 # ---------------------------------------------------------------------------
@@ -149,11 +171,11 @@ class DedicatedBrowserLauncher:
         self._broker_proc: Optional[asyncio.subprocess.Process] = None
 
     def _build_chrome_args(self) -> list[str]:
-        chrome_bin = os.environ.get("CHROME_BINARY") or find_chrome_binary()
+        chrome_bin = os.environ.get("CHROME_PATH") or os.environ.get("CHROME_BINARY") or find_chrome_binary()
         if not chrome_bin:
             raise RuntimeError(
                 "Could not locate a Chrome or Chromium binary.\n"
-                "Install Google Chrome Beta or set CHROME_BINARY=/path/to/chrome."
+                "Install Google Chrome Beta or set CHROME_PATH=/path/to/chrome."
             )
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
