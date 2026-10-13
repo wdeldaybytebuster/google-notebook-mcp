@@ -27,19 +27,20 @@ Update this file after every meaningful implementation change.
 * **Phase 5 Scotty Resumable Uploads & Readiness Polling**: Finalized file ingestion via Scotty 3-step upload protocol (`o4cbdc` intent registration -> `/upload/_/` session creation with `PROJECT_ID`, `SOURCE_NAME`, `SOURCE_ID` -> finalized byte streaming). Implemented Full Jitter Exponential Backoff state machine for `wait_until_ready=true` polling `rLM1Ne` row `[102]` until `READY` (2) or `FAILED`/`ERROR` (3).
 * **Harmonized IPC Socket Path**: Standardized default Unix domain socket path to `/tmp/notebooklm-mcp-broker.sock` (`0o600`) across `native_host.py` and `broker.py` with `MCP_BROKER_SOCKET` environment variable override.
 * **Multi-Client Drop-In Configurations & Documentation**: Generated ready-to-copy client configuration snippets for Antigravity IDE, Antigravity CLI (`agy`), Claude Code, Cursor, and Windsurf in `config/clients/` alongside a comprehensive setup guide in `docs/client-configuration.md`.
-* **Full Test Suite & Strict Typing Convergence**: 85 unit and integration tests passing (`pytest -v tests/`). Strict type checking clean (`mypy --strict src/ tests/` - 37 source files with zero errors).
+* **Full Test Suite & Strict Typing Convergence**: 86 unit and integration tests passing (`pytest -v tests/`). Strict type checking clean (`mypy --strict src/ tests/` - 37 source files with zero errors).
 
 #### In Progress
-* None (All implementation and test convergence milestones completed).
+* **End-to-End Live Integration Testing**: Dedicated Chrome Beta browser launch, pairing, and live 5-tool qualification against Google Notebooks.
 
 #### Next Up
-1. **Zero-Friction Launch**: Run `gemini-notebook-mcp launch` to open the dedicated Chrome window with the extension auto-loaded.
-2. **User-In-The-Loop Allowlist Seeding**: Run `gemini-notebook-mcp allowlist seed` to interactively select which notebooks the AI coding agent is permitted to view.
-3. **Agent Configuration**: Add `gemini-notebook` MCP server using the drop-in configs in `config/clients/` or `docs/client-configuration.md`.
+1. **Dedicated Browser Launch**: Run `gemini-notebook-mcp launch` with `--no-sandbox` container support to launch Chrome Beta and authenticate at `notebook.google.com`.
+2. **User-In-The-Loop Allowlist Seeding**: Run `gemini-notebook-mcp allowlist seed` to confirm or update permitted notebooks.
+3. **Live 5-Tool Qualification**: Execute `scripts/live_smoke_test.py <notebook_id>` to verify all 5 MCP tools against live Google services.
 
 #### Open Questions & Resolved Mitigations
 1. **Google Drive Native Ingestion Wire Format**: Resolved via fail-closed validation and clear error messaging on incomplete parameters.
 2. **Numeric Source Readiness Index Variance**: Resolved via multi-index defensive scan across indices 3, 4, 5 of `rLM1Ne` row metadata before falling back to `UNKNOWN`.
+3. **Crostini Linux Container Zygote Sandbox Crash**: Resolved by automatically passing `--no-sandbox` when in a container environment (`/usr/bin/sommelier`), allowing Sommelier Wayland bridging.
 
 #### Architecture Decisions
 * **ADR-001 (Browser-Resident Broker over Disk Cookie Extraction)**: Direct on-disk SQLite cookie reads fail on modern Chrome due to App-Bound Encryption and Device Bound Session Credentials. Executing in-browser via Manifest V3 natively satisfies TPM cryptographic challenges and preserves session renewal without exporting credentials.
@@ -51,5 +52,5 @@ Update this file after every meaningful implementation change.
 #### Session Notes
 * Operating environment: ChromeOS Crostini / Debian 12 development node.
 * Enforced runtime caps: `UV_THREADPOOL_SIZE=3`, `NODE_OPTIONS="--max-old-space-size=1024"`, `ulimit -n 65536`, zero swap allocated.
-* Test status: 62/62 passing (`pytest -v tests/`). Type check: `mypy --strict src/ tests/` clean (33 files).
+* Test status: 86/86 passing (`pytest -v tests/`). Type check: `mypy --strict src/ tests/` clean (37 files).
 
