@@ -180,7 +180,7 @@ class DedicatedBrowserLauncher:
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
 
-        return [
+        args = [
             chrome_bin,
             f"--user-data-dir={self.profile_dir}",
             f"--load-extension={self.extension_dir}",
@@ -190,6 +190,12 @@ class DedicatedBrowserLauncher:
             "--disable-background-mode",
             NOTEBOOK_URL,
         ]
+        # In containerized / Crostini environments without unprivileged zygote namespaces,
+        # --no-sandbox is required to allow Sommelier Wayland bridging and prevent core dumps.
+        if os.environ.get("CHROME_NO_SANDBOX") == "1" or Path("/usr/bin/sommelier").is_file():
+            args.insert(1, "--no-sandbox")
+
+        return args
 
     async def launch(self) -> None:
         """Full launch sequence: Chrome -> auth check -> optional broker start."""
@@ -207,8 +213,21 @@ class DedicatedBrowserLauncher:
         self._chrome_proc = await asyncio.create_subprocess_exec(
             *chrome_args,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
+
+        # Detect immediate startup crash
+        try:
+            await asyncio.wait_for(self._chrome_proc.wait(), timeout=0.8)
+            stderr_out = b""
+            if self._chrome_proc.stderr:
+                stderr_out = await self._chrome_proc.stderr.read()
+            raise RuntimeError(
+                f"Chrome process exited immediately (code {self._chrome_proc.returncode}).\n"
+                f"{stderr_out.decode('utf-8', errors='replace')}"
+            )
+        except asyncio.TimeoutError:
+            pass
 
         print(
             f"[launcher] Chrome launched (PID {self._chrome_proc.pid}). "
