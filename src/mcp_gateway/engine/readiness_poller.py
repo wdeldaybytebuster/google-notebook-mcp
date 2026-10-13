@@ -20,6 +20,7 @@ class SourceStatus(IntEnum):
     PROCESSING = 1
     READY = 2
     ERROR = 3
+    FAILED = 3
     PREPARING = 5
 
 
@@ -28,8 +29,8 @@ def parse_source_status(source_row: list[Any]) -> SourceStatus:
 
     The status integer appears at index 4 of the source row inside the
     ``rLM1Ne`` response, but the exact position has varied across API
-    versions.  This function defensively scans indices 3, 4, and 5 to
-    tolerate minor schema shifts.
+    versions.  This function checks index 4 first, then scans indices 3
+    and 5 to tolerate minor schema shifts.
 
     Parameters
     ----------
@@ -43,7 +44,7 @@ def parse_source_status(source_row: list[Any]) -> SourceStatus:
         recognisable status value is found at any of the scanned indices.
     """
     _status_values = {s.value for s in SourceStatus if s != SourceStatus.UNKNOWN}
-    for idx in (3, 4, 5):
+    for idx in (4, 3, 5):
         if idx >= len(source_row):
             continue
         candidate = source_row[idx]
@@ -108,16 +109,29 @@ async def poll_until_ready(
         # Find the row that matches our source_id.
         status = SourceStatus.UNKNOWN
         for row in source_rows:
-            if not isinstance(row, list):
-                continue
-            # Source ID is typically at index 0 of the row.
-            if row and row[0] == source_id:
-                status = parse_source_status(row)
-                break
+            if isinstance(row, dict):
+                if str(row.get("id")) == source_id:
+                    if "status_code" in row:
+                        try:
+                            status = SourceStatus(int(row["status_code"]))
+                        except ValueError:
+                            status = SourceStatus.UNKNOWN
+                    elif "status" in row:
+                        try:
+                            status = SourceStatus[str(row["status"])]
+                        except KeyError:
+                            status = SourceStatus.UNKNOWN
+                    elif "raw_row" in row and isinstance(row["raw_row"], list):
+                        status = parse_source_status(row["raw_row"])
+                    break
+            elif isinstance(row, list):
+                if row and str(row[0]) == source_id:
+                    status = parse_source_status(row)
+                    break
 
         if status == SourceStatus.READY:
             return SourceStatus.READY
-        if status == SourceStatus.ERROR:
+        if status in (SourceStatus.ERROR, SourceStatus.FAILED):
             return SourceStatus.ERROR
         # UNKNOWN keeps polling — do not raise.
 

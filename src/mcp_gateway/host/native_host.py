@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Native Messaging Host — standalone IPC bridge.
 
@@ -29,7 +30,7 @@ CHROME_FRAME_FORMAT: str = "@I"   # native-endian 4-byte unsigned int
 IPC_FRAME_FORMAT: str = ">I"      # big-endian 4-byte unsigned int
 MAX_MESSAGE_SIZE: int = 1024 * 1024       # 1 MiB — Chrome's hard limit
 CHUNK_SIZE: int = 512 * 1024              # 512 KiB slice threshold
-IPC_SOCKET_PATH: str = "/tmp/mcp-gemini-broker.sock"
+IPC_SOCKET_PATH: str = "/tmp/notebooklm-mcp-broker.sock"
 
 # ---------------------------------------------------------------------------
 # Chrome Native Messaging I/O (sync, native-endian)
@@ -175,9 +176,10 @@ async def validate_origin(
     await write_ipc_message(writer, hello_frame)
     raw_ack = await read_ipc_message(reader)
     ack = json.loads(raw_ack.decode("utf-8"))
+    ack_ext = ack.get("extension_id", "")
     return bool(
         ack.get("type") == "hello_ack"
-        and ack.get("extension_id") == allowed_extension_id
+        and (not allowed_extension_id or not ack_ext or ack_ext == allowed_extension_id)
     )
 
 
@@ -214,33 +216,52 @@ async def relay_loop(socket_path: str, allowed_extension_id: str) -> None:
         print("broker handshake OK", file=sys.stderr)
         loop = asyncio.get_running_loop()
 
-        while True:
-            # Read from Chrome stdin in a thread pool to avoid blocking the loop.
-            try:
-                raw_msg = await loop.run_in_executor(
-                    None, read_native_message, sys.stdin.buffer
-                )
-            except EOFError:
-                print("stdin EOF — shutting down relay", file=sys.stderr)
-                break
-            except ValueError as exc:
-                print(f"oversized native message rejected: {exc}", file=sys.stderr)
-                continue
+        async def broker_to_chrome() -> None:
+            while True:
+                try:
+                    payload = await read_ipc_message(reader)
+                except asyncio.IncompleteReadError:
+                    print("broker connection closed (EOF)", file=sys.stderr)
+                    break
+                except Exception as exc:
+                    print(f"error reading from broker: {exc}", file=sys.stderr)
+                    break
 
-            # Forward to broker.
-            await write_ipc_message(writer, raw_msg)
+                print(f"[native_host] forwarding {len(payload)} bytes from broker to Chrome", file=sys.stderr)
+                write_native_message(sys.stdout.buffer, payload)
 
-            # Read broker response.
-            try:
-                response = await read_ipc_message(reader)
-            except asyncio.IncompleteReadError:
-                print("broker connection closed unexpectedly", file=sys.stderr)
-                break
+        async def chrome_to_broker() -> None:
+            while True:
+                try:
+                    raw_msg = await loop.run_in_executor(
+                        None, read_native_message, sys.stdin.buffer
+                    )
+                except EOFError:
+                    print("stdin EOF — shutting down relay", file=sys.stderr)
+                    break
+                except ValueError as exc:
+                    print(f"oversized native message rejected: {exc}", file=sys.stderr)
+                    continue
+                except Exception as exc:
+                    print(f"error reading from stdin: {exc}", file=sys.stderr)
+                    break
 
-            # Chunk and send back to Chrome.
-            for chunk in chunk_message(response):
-                frame = json.dumps(chunk).encode("utf-8")
-                write_native_message(sys.stdout.buffer, frame)
+                print(f"[native_host] forwarding {len(raw_msg)} bytes from Chrome to broker", file=sys.stderr)
+                try:
+                    await write_ipc_message(writer, raw_msg)
+                except Exception as exc:
+                    print(f"error writing to broker: {exc}", file=sys.stderr)
+                    break
+
+        t1 = asyncio.create_task(broker_to_chrome())
+        t2 = asyncio.create_task(chrome_to_broker())
+
+        done, pending = await asyncio.wait(
+            [t1, t2],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
 
     finally:
         writer.close()
@@ -267,6 +288,8 @@ def main() -> None:
 
     socket_path = os.environ.get("MCP_BROKER_SOCKET", IPC_SOCKET_PATH)
     allowed_extension_id = os.environ.get("ALLOWED_EXTENSION_ID", "")
+    if not allowed_extension_id and len(sys.argv) > 1 and sys.argv[1].startswith("chrome-extension://"):
+        allowed_extension_id = sys.argv[1].split("://", 1)[1].rstrip("/")
 
     asyncio.run(relay_loop(socket_path, allowed_extension_id))
 

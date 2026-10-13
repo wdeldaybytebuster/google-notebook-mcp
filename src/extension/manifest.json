@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Notebook MCP Bridge",
+  "version": "0.1.0",
+  "description": "Browser-resident execution broker for the Gemini Notebook MCP gateway.",
+  "background": {
+    "service_worker": "service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://notebook.google.com/*",
+        "https://notebooklm.google.com/*"
+      ],
+      "js": ["content_script.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "scripting",
+    "tabs",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://notebook.google.com/*",
+    "https://notebooklm.google.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Gemini Notebook MCP"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

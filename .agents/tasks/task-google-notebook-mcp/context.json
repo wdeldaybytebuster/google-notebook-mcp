@@ -1,0 +1,23 @@
+{
+  "project_type": "Python 3.11+ asyncio MCP gateway + Manifest V3 Chrome Extension + SQLite journal. Greenfield — no source code exists yet, only docs/.",
+  "language": "Python 3.11+ (broker, engine, storage, native host) + JavaScript/ES2022 (extension service_worker.js, content_script.js, page-main.js, popup.js)",
+  "build_system": "uv / pyproject.toml (PEP 621). Python packages under src/mcp_gateway/ and src/ with 'src' layout. Extension files under src/extension/ — no bundler (plain JS). Test runner: pytest. Type checking: mypy --strict. No Makefile yet; build commands are bare uv / pytest invocations.",
+  "test_framework": "pytest with pytest-asyncio for async tests. Test files live in tests/. Fixtures in tests/fixtures/.",
+  "build_command": "uv run python -m mypy --strict src/",
+  "test_command": "uv run pytest tests/ -v",
+  "verification_instructions": "1. Run `uv run mypy --strict src/` — must report zero errors. 2. Run `uv run pytest tests/ -v` — all tests must pass. 3. Run `uv run python -m py_compile src/mcp_gateway/**/*.py` to confirm no syntax errors. The extension JS has no build step; confirm no syntax errors by loading unpacked in Chrome.",
+  "snapshot_or_generated_files": "tests/fixtures/golden_wire_captures.json is a checked-in golden file — never auto-generate it. schema.sql is immutable; changes require explicit migration scripts.",
+  "environment_constraints": "ChromeOS Crostini / Debian 12 dev node. Runtime caps: UV_THREADPOOL_SIZE=3, ulimit -n 65536, NODE_OPTIONS='--max-old-space-size=1024', zero swap. Unix socket MUST bind under /tmp/ with 0o600 permissions. Python 3.11+ required (match-statement, tomllib). MCP SDK: use mcp PyPI package (modelcontextprotocol). Do NOT use node-keytar. Do NOT restart or launch live Chrome processes.",
+  "contribution_requirements": "All Python must pass `mypy --strict`. Zero string interpolation in SQL. Zero secrets in logs/errors/IPC frames. Separate processes for Native Messaging and MCP stdio. Exactly 5 MCP tools. Mutations in 'sent' state never auto-replayed. UTF-16 coords translated before returning. UV_THREADPOOL_SIZE=3 set by broker on startup. All ADRs/progress-tracker.md updated after each FEAT.",
+  "key_patterns": "1. Byte-order: Chrome Native Messaging = struct '@I' (native endian); Broker IPC = struct '>I' (big endian). 2. Anti-XSSI: strip leading ')]}\\n' from every batchexecute response. 3. Parameterized SQL only — no f-strings in queries. 4. Frozen dataclasses for immutable payloads. 5. Full Jitter Exponential Backoff: delay = random.uniform(0, min(base * 2**attempt, 30.0)), max_timeout=300s. 6. Source status enums: UNKNOWN=-1, PROCESSING=1, READY=2, ERROR=3, PREPARING=5 (scan indices 3,4,5 defensively). 7. Closed JSON schemas: additionalProperties:false on all 5 tools. 8. Failure envelope: {ok:false, error:{code, message, retryable}}. 9. Extension popup: 360x480px, dark theme, Lucide icons, Tailwind utility classes, zero React/Vue.",
+  "relevant_files": [
+    "docs/Full Project Scope and Info Read First.md",
+    "docs/architecture.md",
+    "docs/code-standards.md",
+    "docs/project-overview.md",
+    "docs/progress-tracker.md",
+    "docs/ui-context.md",
+    "docs/ai-workflow-rules.md"
+  ],
+  "directory_structure": "src/mcp_gateway/engine/ — stream decoder, coordinate, RPC templates, readiness poller | src/mcp_gateway/broker/ — broker daemon, allowlist, secret scrubber | src/mcp_gateway/schemas/ — tools.py, error.py | src/mcp_gateway/storage/ — schema.sql, journal.py | src/mcp_gateway/host/ — native_host.py | src/extension/ — manifest.json, service_worker.js, content_script.js, page-main.js, popup.html, popup.js, popup.css | config/ — allowlist.json, native_host_linux.json, native_host_macos.json, native_host_windows.json | tests/ — __init__.py, fixtures/golden_wire_captures.json, test_stream_decoder.py, test_coordinate.py, test_journal.py, test_native_framing.py | pyproject.toml, README.md"
+}

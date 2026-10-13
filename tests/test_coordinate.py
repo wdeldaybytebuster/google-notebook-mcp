@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+from typing import Any, cast
+
 import pytest
 
 from mcp_gateway.engine.coordinate import (
@@ -17,9 +19,9 @@ from mcp_gateway.engine.coordinate import (
 FIXTURES_PATH = pathlib.Path(__file__).parent / "fixtures" / "golden_wire_captures.json"
 
 
-def load_fixtures() -> dict:  # type: ignore[type-arg]
+def load_fixtures() -> dict[str, Any]:
     """Load the golden wire captures fixture file."""
-    return json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(FIXTURES_PATH.read_text(encoding="utf-8")))
 
 
 def test_ascii_roundtrip() -> None:

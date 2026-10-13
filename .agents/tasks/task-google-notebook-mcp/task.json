@@ -1,0 +1,7 @@
+{
+  "task_id": "task-google-notebook-mcp",
+  "task_description": "Full greenfield implementation of the Google Gemini Notebook MCP gateway: pyproject scaffolding, wire protocol engine, native host IPC bridge, Manifest V3 Chrome extension, 5-tool MCP broker daemon, and Scotty upload + mutation journal storage layer.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005", "FEAT-006"],
+  "blocked_reason": null
+}

@@ -9,6 +9,12 @@ dependencies = [
     "httpx>=0.27.0",
 ]
 
+[project.scripts]
+gemini-notebook-mcp = "mcp_gateway.cli:main"
+gemini-notebook-mcp-launcher = "mcp_gateway.launcher:main"
+gemini-notebook-mcp-allowlist = "mcp_gateway.allowlist_wizard:main"
+
+
 [dependency-groups]
 dev = [
     "mypy>=1.9.0",

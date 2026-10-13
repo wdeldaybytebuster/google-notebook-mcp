@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-001",
+  "type": "chore",
+  "description": "Project scaffolding: create pyproject.toml, README.md, all __init__.py files, and config templates. Establishes the installable package layout so every subsequent FEAT can import cleanly. Independent of all other FEATs — must be done first.",
+  "status": "completed",
+  "steps": [
+    "Create pyproject.toml at /home/williamdeldaymarketing/Projects/Google Notebook MCP/pyproject.toml. Use PEP 621 format with [project] name='gemini-notebook-mcp', version='0.1.0', requires-python='>=3.11'. Dependencies: mcp>=1.0.0, keyring>=24.0.0, aiofiles>=23.0.0, httpx>=0.27.0. Dev dependencies: mypy>=1.9.0, pytest>=8.0.0, pytest-asyncio>=0.23.0, ruff>=0.4.0. Set [tool.mypy] strict=true, python_version='3.11'. Set [tool.pytest.ini_options] asyncio_mode='auto'. Configure [build-system] with hatchling. Set [tool.hatch.build.targets.wheel] packages=['src/mcp_gateway'].",
+    "Create README.md at /home/williamdeldaymarketing/Projects/Google Notebook MCP/README.md. Include: project title, one-paragraph description, prerequisites (Python 3.11+, Chrome, uv), quickstart steps (uv sync, register native host, load unpacked extension, run broker), 5-tool reference table, security invariants summary, and license placeholder.",
+    "Create all __init__.py files: src/__init__.py (empty), src/mcp_gateway/__init__.py (exports version='0.1.0'), src/mcp_gateway/engine/__init__.py (empty), src/mcp_gateway/broker/__init__.py (empty), src/mcp_gateway/schemas/__init__.py (empty), src/mcp_gateway/storage/__init__.py (empty), src/mcp_gateway/host/__init__.py (empty), tests/__init__.py (empty), tests/fixtures/__init__.py (empty). Create all parent directories as needed.",
+    "Create config/allowlist.json at /home/williamdeldaymarketing/Projects/Google Notebook MCP/config/allowlist.json. Schema: {\"version\": 1, \"provider_mode\": \"browser\", \"accounts\": [], \"notebooks\": []}. Add a comment block at top explaining fields.",
+    "Create config/native_host_linux.json at /home/williamdeldaymarketing/Projects/Google Notebook MCP/config/native_host_linux.json. Fields: name='com.mcp.gemini.broker', description='Google Gemini Notebook MCP Native Messaging Host', path='PLACEHOLDER_ABSOLUTE_PATH_TO_native_host.py', type='stdio', allowed_origins=['chrome-extension://PLACEHOLDER_EXTENSION_ID/']. Note in a comment that 'path' must be replaced with the absolute path during setup.",
+    "Create config/native_host_macos.json — same content as linux variant but with Darwin install notes in a comment.",
+    "Create config/native_host_windows.json — same content but type remains 'stdio'; add Windows registry key comment: 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.mcp.gemini.broker'.",
+    "Run `uv sync` to create the lockfile and confirm the package installs cleanly. Verify with `uv run python -c 'import mcp_gateway; print(mcp_gateway.__version__)'`."
+  ],
+  "acceptance_criteria": [
+    "uv sync completes without error",
+    "uv run python -c 'import mcp_gateway; print(mcp_gateway.__version__)' prints '0.1.0'",
+    "uv run mypy --strict src/ reports zero errors (only __init__.py files exist at this point)",
+    "All __init__.py files exist at their specified paths",
+    "config/allowlist.json, config/native_host_linux.json, config/native_host_macos.json, config/native_host_windows.json all exist and are valid JSON"
+  ],
+  "verification": [
+    "uv sync",
+    "uv run python -c 'import mcp_gateway; print(mcp_gateway.__version__)'",
+    "uv run mypy --strict src/",
+    "python3 -c 'import json; [json.load(open(f)) for f in [\"config/allowlist.json\",\"config/native_host_linux.json\",\"config/native_host_macos.json\",\"config/native_host_windows.json\"]]; print(\"all JSON valid\")'"
+  ],
+  "blocked_reason": null,
+  "findings": "All acceptance criteria met. uv sync completes cleanly. mcp_gateway.__version__ == '0.1.0'. mypy --strict reports zero errors across 7 source files. All 4 config JSON files are valid. Dev dependencies moved to [dependency-groups] (PEP 735) so plain `uv sync` includes them without --extra dev. Runtime: CPython 3.14.8 (exceeds 3.11 minimum)."
+}
