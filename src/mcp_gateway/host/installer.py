@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-import platform
+import re
 import sys
 from typing import Any, Callable
 
@@ -62,8 +62,6 @@ def get_target_manifest_directories(platform_name: str | None = None) -> list[Pa
     else:
         return [home / ".config" / "NativeMessagingHosts"]
 
-
-import re
 
 EXTENSION_ID_REGEX = re.compile(r"^[a-z]{32}$")
 

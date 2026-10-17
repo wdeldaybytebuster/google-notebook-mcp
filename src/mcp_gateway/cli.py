@@ -288,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--allowlist-path",
         type=Path,
         default=None,
-        help=f"Path to allowlist.json (default: ~/.config/notebooklm-mcp-bridge/allowlist.json)",
+        help="Path to allowlist.json (default: ~/.config/notebooklm-mcp-bridge/allowlist.json)",
     )
 
     return parser

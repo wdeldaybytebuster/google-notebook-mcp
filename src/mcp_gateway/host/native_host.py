@@ -29,7 +29,7 @@ _src_root = str(Path(__file__).resolve().parent.parent.parent)
 if _src_root not in sys.path:
     sys.path.insert(0, _src_root)
 
-from mcp_gateway.transport import get_default_ipc_path, open_ipc_connection
+from mcp_gateway.transport import get_default_ipc_path, open_ipc_connection  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants

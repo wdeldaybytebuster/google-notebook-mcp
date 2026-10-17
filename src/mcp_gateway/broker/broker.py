@@ -59,7 +59,7 @@ from mcp_gateway.engine.stream_decoder import (
     BatchexecuteStreamDecoder,
     GenerateFreeFormStreamParser,
 )
-from mcp_gateway.broker.session import SessionLock, SessionState
+from mcp_gateway.broker.session import SessionLock
 from mcp_gateway.schemas.error import (
     ALLOWLIST_DENIED,
     AUTH_REQUIRED,
@@ -69,8 +69,6 @@ from mcp_gateway.schemas.error import (
     NOT_FOUND,
     REQUEST_KEY_CONFLICT,
     RESOURCE_EXHAUSTED,
-    SESSION_LOCKED,
-    SESSION_UNLOCKED,
     UPSTREAM_SCHEMA_DRIFT,
     categorize_error,
     make_error,
