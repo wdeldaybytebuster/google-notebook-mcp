@@ -77,3 +77,5 @@ This presents a numbered list of all your NotebookLM notebooks. Enter the number
 - Configure your AI editor by following the [Client Configuration Guide](client-configuration.md).
 - Review all available tools in the [MCP Tools Reference](tools-reference.md).
 - Read the [Security Architecture](security.md) to understand how your session tokens remain secure.
+- Browse the [Online GitHub Wiki](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki) for additional guides and interactive walkthroughs.
+- Inspect the [GitHub Launch Completion Report](github-launch-completion-report.md) for full audit records and verification ledgers.

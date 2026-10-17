@@ -3,6 +3,8 @@
 <div align="center">
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/wdeldaybytebuster/google-notebook-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/wdeldaybytebuster/google-notebook-mcp/actions/workflows/ci.yml)
+[![Wiki](https://img.shields.io/badge/docs-GitHub_Wiki-blueviolet.svg)](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![MCP Protocol](https://img.shields.io/badge/Protocol-MCP-green.svg)](https://modelcontextprotocol.io)
 [![Security](https://img.shields.io/badge/Security-Zero--Credential--Export-success.svg)](docs/security.md)
@@ -10,7 +12,7 @@
 
 **A secure, zero-credential-export Model Context Protocol (MCP) gateway connecting AI coding agents to your private [Google NotebookLM](https://notebooklm.google.com) knowledge bases.**
 
-[Quickstart](#quickstart) • [Supported Clients](#client-configuration) • [Tool Reference](#mcp-tool-reference) • [Documentation](docs/) • [Security Model](docs/security.md)
+[Quickstart](#quickstart) • [Wiki](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki) • [Supported Clients](#client-configuration) • [Tool Reference](#mcp-tool-reference) • [Documentation](docs/) • [Security Model](docs/security.md)
 
 </div>
 
@@ -219,12 +221,14 @@ When working inside a project repository, the gateway can automatically remember
 
 ## Documentation
 
+- **[GitHub Wiki](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki)**: Comprehensive online wiki with interactive quickstarts, client guides, and FAQs.
 - **[Getting Started Guide](docs/getting-started.md)**: Full walkthrough for Linux, macOS, and Windows.
 - **[Client Configuration](docs/client-configuration.md)**: Setup guides for all major AI coding agents.
 - **[Tools Reference](docs/tools-reference.md)**: Complete parameter reference, types, and error envelopes.
 - **[Troubleshooting & FAQs](docs/troubleshooting.md)**: Diagnosing native messaging, permissions, and platform quirks.
 - **[Security Architecture](docs/security.md)**: Deep dive into TPM/DBSC containment and secret scrubbing.
 - **[Architecture Decision Records](docs/architecture.md)**: The 17 core architectural invariants (ADR-001 through ADR-017).
+- **[GitHub Launch Completion Report](docs/github-launch-completion-report.md)**: Full project ledger and security audit from the public repository launch.
 
 ---
 
