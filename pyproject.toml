@@ -1,7 +1,34 @@
 [project]
 name = "gemini-notebook-mcp"
 version = "0.1.0"
+description = "Zero-credential-export Model Context Protocol (MCP) gateway connecting AI coding agents to Google NotebookLM."
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "wdeldaybytebuster", email = "wdeldaybytebuster@users.noreply.github.com" }
+]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "notebooklm",
+    "gemini",
+    "rag",
+    "claude",
+    "cursor",
+    "ai-agents",
+    "privacy-first",
+    "zero-trust",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "mcp>=1.0.0",
     "keyring>=24.0.0",
@@ -9,11 +36,16 @@ dependencies = [
     "httpx>=0.27.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/wdeldaybytebuster/google-notebook-mcp"
+Documentation = "https://github.com/wdeldaybytebuster/google-notebook-mcp#readme"
+Repository = "https://github.com/wdeldaybytebuster/google-notebook-mcp.git"
+Issues = "https://github.com/wdeldaybytebuster/google-notebook-mcp/issues"
+
 [project.scripts]
 gemini-notebook-mcp = "mcp_gateway.cli:main"
 gemini-notebook-mcp-launcher = "mcp_gateway.launcher:main"
 gemini-notebook-mcp-allowlist = "mcp_gateway.allowlist_wizard:main"
-
 
 [dependency-groups]
 dev = [

@@ -36,10 +36,36 @@ htmlcov/
 .tox/
 .nox/
 
-# Temporary / node cache
+# Local Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Active Project Notebook Binding (local user state)
+.notebook_mcp.json
+!.notebook_mcp.json.example
+
+# Runtime DBs, Sockets, and Logs
+*.db
+*.db-wal
+*.db-shm
+*.sock
+*.log
+chrome-profile/
+
+# Temporary / node cache / test residue
+.agents/tasks/
 1/
+**/1/
 tmp/
 *.tmp
+C:*
+C:\*
+
+# Large Media / Binary Assets
+*.m4a
+*.mp4
+*.wav
 
 # OS & IDE
 .DS_Store

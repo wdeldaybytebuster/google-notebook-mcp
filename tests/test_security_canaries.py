@@ -103,12 +103,12 @@ async def test_allowlist_enforcement_blocks_ipc(facade: McpFacade, broker: Broke
     call_entry = facade.server._request_handlers.get("tools/call")
     assert call_entry is not None
 
-    # Call with non-allowlisted notebook ID
+    # Call with non-allowlisted notebook ID via select_notebook
     forbidden_uuid = "00000000-0000-0000-0000-000000000000"
     req = types.CallToolRequest(
         method="tools/call",
         params=types.CallToolRequestParams(
-            name="get_notebook_metadata",
+            name="select_notebook",
             arguments={"notebook_id": forbidden_uuid},
         ),
     )
@@ -136,6 +136,10 @@ async def test_closed_schema_fuzzing_rejects_extra_properties(facade: McpFacade)
         (
             "list_notebooks",
             {"page_size": 10, "malicious_injected_prop": "evil_payload"},
+        ),
+        (
+            "select_notebook",
+            {"notebook_id": "nb-allowed-safe", "extra_attack_field": 123},
         ),
         (
             "get_notebook_metadata",

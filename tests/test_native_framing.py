@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import struct
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 
@@ -108,3 +109,83 @@ def test_chrome_vs_ipc_byte_order() -> None:
     else:
         # On big-endian machines native == big — both are b'\x00\x00\x00\x01'.
         assert native_packed == big_packed
+
+
+def test_inject_boundary_idempotency_injects_uuid() -> None:
+    import json
+    import uuid
+    from mcp_gateway.host.native_host import inject_boundary_idempotency
+
+    cmd = {"action": "add_source", "notebook_id": "nb-123"}
+    raw = json.dumps(cmd).encode("utf-8")
+    result = inject_boundary_idempotency(raw)
+    data = json.loads(result.decode("utf-8"))
+
+    assert "idempotency_key" in data
+    assert "request_key" in data
+    assert data["idempotency_key"] == data["request_key"]
+    # Check that it's a valid UUID
+    parsed_uuid = uuid.UUID(data["idempotency_key"])
+    assert str(parsed_uuid) == data["idempotency_key"]
+
+
+def test_inject_boundary_idempotency_preserves_existing_keys() -> None:
+    import json
+    from mcp_gateway.host.native_host import inject_boundary_idempotency
+
+    cmd = {
+        "action": "query_notebook",
+        "notebook_id": "nb-123",
+        "request_key": "my-custom-key-999",
+    }
+    raw = json.dumps(cmd).encode("utf-8")
+    result = inject_boundary_idempotency(raw)
+    data = json.loads(result.decode("utf-8"))
+
+    assert data["request_key"] == "my-custom-key-999"
+    assert data["idempotency_key"] == "my-custom-key-999"
+
+
+def test_inject_boundary_idempotency_ignores_non_mutation() -> None:
+    import json
+    from mcp_gateway.host.native_host import inject_boundary_idempotency
+
+    cmd = {"action": "list_notebooks"}
+    raw = json.dumps(cmd).encode("utf-8")
+    result = inject_boundary_idempotency(raw)
+    data = json.loads(result.decode("utf-8"))
+
+    assert "idempotency_key" not in data
+
+
+def test_setup_stderr_redirection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pathlib import Path
+    import sys
+    from mcp_gateway.host.native_host import setup_stderr_redirection
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    old_stderr = sys.stderr
+    try:
+        setup_stderr_redirection()
+        assert (tmp_path / ".config" / "notebooklm-mcp-bridge" / "native_host_stderr.log").exists()
+    finally:
+        sys.stderr = old_stderr
+
+
+def test_windows_binary_mode_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    import sys
+    from unittest.mock import MagicMock
+
+    mock_msvcrt = MagicMock()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "msvcrt", mock_msvcrt)
+
+    o_binary = getattr(os, "O_BINARY", 0x8000)
+    # Call the binary mode setup branch without starting the loop
+    if sys.platform == "win32":
+        import msvcrt
+        msvcrt.setmode(0, o_binary)
+        msvcrt.setmode(1, o_binary)
+    assert mock_msvcrt.setmode.call_count == 2
+

@@ -21,6 +21,8 @@ os.environ["UV_THREADPOOL_SIZE"] = "3"
 
 def enforce_resource_limits() -> None:
     """Configures threadpool and file descriptor limits on POSIX environments."""
+    if sys.platform == "win32":
+        return
     try:
         import resource
 
@@ -34,6 +36,12 @@ def enforce_resource_limits() -> None:
 
 def run_mcp(socket_path: str | None = None) -> int:
     """Runs the MCP stdio facade."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)   # type: ignore[attr-defined]
+        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)  # type: ignore[attr-defined]
+
     from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon, McpFacade
 
     cfg_kwargs: dict[str, str] = {}
@@ -54,11 +62,12 @@ def run_serve(
 ) -> int:
     """Runs the shared persistent BrokerDaemon."""
     from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon
+    from mcp_gateway.transport import get_default_ipc_path
 
     enforce_resource_limits()
 
     config = BrokerConfig(
-        socket_path=socket_path or os.environ.get("MCP_BROKER_SOCKET", "/tmp/notebooklm-mcp-broker.sock"),
+        socket_path=socket_path or os.environ.get("MCP_BROKER_SOCKET", get_default_ipc_path()),
         allowlist_path=allowlist_path,
         journal_db_path=journal_db_path,
     )
@@ -140,10 +149,11 @@ def run_allowlist_seed(
 ) -> int:
     """Runs the Phase 2 interactive allowlist seed wizard."""
     from mcp_gateway.allowlist_wizard import run_seed_wizard
+    from mcp_gateway.transport import get_default_ipc_path
     import os
 
     _socket = socket_path or os.environ.get(
-        "MCP_BROKER_SOCKET", "/tmp/notebooklm-mcp-broker.sock"
+        "MCP_BROKER_SOCKET", get_default_ipc_path()
     )
     return asyncio.run(run_seed_wizard(socket_path=_socket, allowlist_path=allowlist_path))
 
@@ -160,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_parser.add_argument(
         "--socket-path",
         default=None,
-        help="Path to broker Unix domain socket (default: /tmp/notebooklm-mcp-broker.sock)",
+        help="Path to broker IPC socket or named pipe",
     )
 
     # Subcommand: serve
@@ -168,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument(
         "--socket-path",
         default=None,
-        help="Path to broker Unix domain socket (default: /tmp/notebooklm-mcp-broker.sock)",
+        help="Path to broker IPC socket or named pipe",
     )
     serve_parser.add_argument(
         "--allowlist",
@@ -272,7 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     seed_parser.add_argument(
         "--socket-path",
         default=None,
-        help="Broker IPC socket path (default: /tmp/notebooklm-mcp-broker.sock)",
+        help="Broker IPC socket or named pipe path",
     )
     seed_parser.add_argument(
         "--allowlist-path",

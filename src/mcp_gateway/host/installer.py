@@ -25,6 +25,14 @@ def get_default_host_script_path() -> Path:
     return Path(__file__).resolve().parent / "native_host.py"
 
 
+SUPPORTED_WINDOWS_REGISTRY_KEYS: list[str] = [
+    r"Software\Google\Chrome\NativeMessagingHosts",
+    r"Software\Google\Chrome Beta\NativeMessagingHosts",
+    r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts",
+    r"Software\Microsoft\Edge\NativeMessagingHosts",
+]
+
+
 def get_target_manifest_directories(platform_name: str | None = None) -> list[Path]:
     """Returns candidate directories for native messaging manifests on the specified platform."""
     plat = (platform_name or sys.platform).lower()
@@ -35,11 +43,17 @@ def get_target_manifest_directories(platform_name: str | None = None) -> list[Pa
             home / ".config" / "google-chrome" / "NativeMessagingHosts",
             home / ".config" / "google-chrome-beta" / "NativeMessagingHosts",
             home / ".config" / "chromium" / "NativeMessagingHosts",
+            home / ".config" / "BraveSoftware" / "Brave-Browser" / "NativeMessagingHosts",
+            home / ".config" / "microsoft-edge" / "NativeMessagingHosts",
+            home / ".config" / "notebooklm-mcp-bridge" / "chrome-profile" / "NativeMessagingHosts",
         ]
     elif plat == "darwin":
         return [
             home / "Library" / "Application Support" / "Google" / "Chrome" / "NativeMessagingHosts",
+            home / "Library" / "Application Support" / "Google" / "Chrome Beta" / "NativeMessagingHosts",
             home / "Library" / "Application Support" / "Chromium" / "NativeMessagingHosts",
+            home / "Library" / "Application Support" / "BraveSoftware" / "Brave-Browser" / "NativeMessagingHosts",
+            home / "Library" / "Application Support" / "Microsoft Edge" / "NativeMessagingHosts",
         ]
     elif plat in ("win32", "windows"):
         appdata = os.environ.get("APPDATA")
@@ -49,6 +63,16 @@ def get_target_manifest_directories(platform_name: str | None = None) -> list[Pa
         return [home / ".config" / "NativeMessagingHosts"]
 
 
+import re
+
+EXTENSION_ID_REGEX = re.compile(r"^[a-z]{32}$")
+
+
+def validate_extension_id(extension_id: str) -> bool:
+    """Validates that extension_id is exactly 32 lowercase Latin letters."""
+    return bool(EXTENSION_ID_REGEX.match(extension_id))
+
+
 def generate_manifest(
     extension_id: str,
     host_path: Path | None = None,
@@ -56,6 +80,10 @@ def generate_manifest(
     description: str = DEFAULT_DESCRIPTION,
 ) -> dict[str, Any]:
     """Generates the Native Messaging Host JSON manifest dict."""
+    if not validate_extension_id(extension_id):
+        raise ValueError(
+            f"Invalid extension_id {extension_id!r}: must be exactly 32 lowercase Latin letters ([a-z]{{32}})"
+        )
     target_path = host_path or get_default_host_script_path()
     return {
         "name": host_name,
@@ -82,44 +110,52 @@ def register_windows_registry(
     manifest_path: Path,
     host_name: str = HOST_NAME,
     registry_writer: Callable[[str, str], None] | None = None,
-) -> None:
-    """Registers the manifest path in Windows Registry (HKCU)."""
-    reg_key_path = rf"Software\Google\Chrome\NativeMessagingHosts\{host_name}"
+) -> list[str]:
+    """Registers the manifest path in Windows Registry (HKCU) across all supported Chromium browsers."""
+    registered: list[str] = []
+    for base_key in SUPPORTED_WINDOWS_REGISTRY_KEYS:
+        reg_key_path = rf"{base_key}\{host_name}"
+        if registry_writer is not None:
+            registry_writer(reg_key_path, str(manifest_path.resolve()))
+            registered.append(reg_key_path)
+            continue
 
-    if registry_writer is not None:
-        registry_writer(reg_key_path, str(manifest_path.resolve()))
-        return
-
-    try:
-        winreg = sys.modules.get("winreg") or __import__("winreg")
-        create_key = getattr(winreg, "CreateKey")
-        set_value = getattr(winreg, "SetValueEx")
-        hkey_cu = getattr(winreg, "HKEY_CURRENT_USER")
-        reg_sz = getattr(winreg, "REG_SZ")
-        with create_key(hkey_cu, reg_key_path) as key:
-            set_value(key, "", 0, reg_sz, str(manifest_path.resolve()))
-    except Exception:
-        pass
+        try:
+            winreg = sys.modules.get("winreg") or __import__("winreg")
+            create_key = getattr(winreg, "CreateKey")
+            set_value = getattr(winreg, "SetValueEx")
+            hkey_cu = getattr(winreg, "HKEY_CURRENT_USER")
+            reg_sz = getattr(winreg, "REG_SZ")
+            with create_key(hkey_cu, reg_key_path) as key:
+                set_value(key, "", 0, reg_sz, str(manifest_path.resolve()))
+            registered.append(reg_key_path)
+        except Exception:
+            pass
+    return registered
 
 
 def unregister_windows_registry(
     host_name: str = HOST_NAME,
     registry_deleter: Callable[[str], None] | None = None,
-) -> None:
-    """Removes the registry key from Windows Registry (HKCU)."""
-    reg_key_path = rf"Software\Google\Chrome\NativeMessagingHosts\{host_name}"
+) -> list[str]:
+    """Removes the registry keys from Windows Registry (HKCU) across all supported Chromium browsers."""
+    unregistered: list[str] = []
+    for base_key in SUPPORTED_WINDOWS_REGISTRY_KEYS:
+        reg_key_path = rf"{base_key}\{host_name}"
+        if registry_deleter is not None:
+            registry_deleter(reg_key_path)
+            unregistered.append(reg_key_path)
+            continue
 
-    if registry_deleter is not None:
-        registry_deleter(reg_key_path)
-        return
-
-    try:
-        winreg = sys.modules.get("winreg") or __import__("winreg")
-        delete_key = getattr(winreg, "DeleteKey")
-        hkey_cu = getattr(winreg, "HKEY_CURRENT_USER")
-        delete_key(hkey_cu, reg_key_path)
-    except Exception:
-        pass
+        try:
+            winreg = sys.modules.get("winreg") or __import__("winreg")
+            delete_key = getattr(winreg, "DeleteKey")
+            hkey_cu = getattr(winreg, "HKEY_CURRENT_USER")
+            delete_key(hkey_cu, reg_key_path)
+            unregistered.append(reg_key_path)
+        except Exception:
+            pass
+    return unregistered
 
 
 def install_manifest(

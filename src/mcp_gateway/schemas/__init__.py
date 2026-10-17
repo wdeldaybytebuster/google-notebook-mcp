@@ -11,8 +11,10 @@ from mcp_gateway.schemas.error import (
     REQUEST_KEY_CONFLICT,
     UPSTREAM_DRIFT,
     VAULT_LOCKED,
+    ErrorCategory,
     ErrorDetail,
     FailureEnvelope,
+    categorize_error,
     make_error,
 )
 from mcp_gateway.schemas.tools import (
@@ -44,8 +46,10 @@ __all__ = [
     "REQUEST_KEY_CONFLICT",
     "UPSTREAM_DRIFT",
     "VAULT_LOCKED",
+    "ErrorCategory",
     "ErrorDetail",
     "FailureEnvelope",
+    "categorize_error",
     "make_error",
     "ADD_SOURCE_SCHEMA",
     "GET_NOTEBOOK_METADATA_SCHEMA",

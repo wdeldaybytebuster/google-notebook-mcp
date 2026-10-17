@@ -29,22 +29,24 @@
 * **Network Header Invariants**: All in-browser `fetch()` calls to batchexecute must include `headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8", "X-Same-Domain": "1" }` and `credentials: "include"`.
 
 #### MCP Tool Contracts & Schemas
-* **Closed JSON Schemas**: Every MCP tool must specify `additionalProperties: false` on input schemas to reject unrecognized arguments.
+* **Closed JSON Schemas & Pydantic Validation**: Every MCP tool must specify `additionalProperties: false` on JSON schemas and `extra="forbid"` on Pydantic v2 input models to reject unrecognized arguments.
 * **Standardized Failure Envelopes**: Errors must return a structured payload matching the contract:
   ```json
   {
     "ok": false,
     "error": {
-      "code": "AUTH_REQUIRED",
-      "message": "Human intervention required in browser.",
+      "code": "ALLOWLIST_DENIED | AUTH_REQUIRED | MUTATION_UNKNOWN | INVALID_ARGUMENT | SESSION_UNLOCKED | SESSION_LOCKED | INTERNAL | NOT_FOUND | STREAM_SEVERED | UPSTREAM_SCHEMA_DRIFT",
+      "message": "Descriptive message",
       "retryable": false
     }
   }
   ```
 * **Protocol-Compliant Annotations**:
-  * `list_notebooks`, `get_notebook_metadata`, `list_sources`: `{ readOnlyHint: true, destructiveHint: false, idempotentHint: true }`.
+  * `select_notebook`: `{ readOnlyHint: false, destructiveHint: false, idempotentHint: true }` (transitions gateway from `DISCOVERY_ONLY` to `ACTIVE_DISPATCH`).
+  * `list_notebooks`, `get_notebook_metadata`, `list_sources`, `list_notes`: `{ readOnlyHint: true, destructiveHint: false, idempotentHint: true }`.
   * `query_notebook`: `{ readOnlyHint: false, destructiveHint: false, idempotentHint: false }` (consumes quota, appends conversation history).
-  * `add_source`: `{ readOnlyHint: false, destructiveHint: false, idempotentHint: false }`.
+  * `add_source`, `create_note`: `{ readOnlyHint: false, destructiveHint: false, idempotentHint: false }`.
+  * `delete_note`: `{ readOnlyHint: false, destructiveHint: true, idempotentHint: true }`.
 
 #### Data Persistence & Storage
 * **SQLite Transaction Discipline**: Every mutation journal state change must execute within an explicit SQLite transaction. Use parameterized queries exclusively—never interpolate SQL strings.
@@ -52,10 +54,12 @@
 * **Vault Backend Allowlist**: Python `keyring` must be configured with an explicit allowlist (`Keyring`, `WinVaultKeyring`, `SecretService.Keyring`). Insecure plaintext file fallbacks must raise `VAULT_LOCKED`.
 
 #### File Organization
-* `src/mcp_gateway/broker/` — MCP stdio facade, policy broker daemon, local IPC server.
+* `src/mcp_gateway/broker/` — MCP stdio facade, policy broker daemon, ADR-011 session lock FSM (`session.py`).
+* `src/mcp_gateway/transport/` — Universal local IPC transport (`ipc.py`), platform path resolution (`paths.py`).
+* `src/mcp_gateway/host/` — Standalone native messaging host (`native_host.py`), multi-browser installer (`installer.py`).
 * `src/mcp_gateway/engine/` — Stream parser, UTF-16 coordinate normalizer, readiness polling engine.
-* `src/mcp_gateway/schemas/` — 5-tool MCP schemas, wire RPC templates, error taxonomy.
+* `src/mcp_gateway/schemas/` — 9 closed tool schemas, wire RPC templates, error taxonomy.
 * `src/mcp_gateway/storage/` — SQLite schema migrations, mutation journal repository.
 * `src/extension/` — `manifest.json`, `service_worker.js`, `content_script.js`, `page-main.js`.
-* `config/` — `allowlist.json` template, native host JSON manifests for Linux/macOS/Windows.
+* `config/` — `allowlist.json` template, client drop-in configurations.
 * `tests/` — Unit tests, synthetic wire fixtures, integration test runners.

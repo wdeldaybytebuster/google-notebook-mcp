@@ -28,6 +28,9 @@ def allowlist_file(tmp_path: Path) -> Path:
     return p
 
 
+from mcp_gateway.broker.session import SessionState
+
+
 @pytest.fixture
 def broker(tmp_path: Path, allowlist_file: Path) -> BrokerDaemon:
     cfg = BrokerConfig(
@@ -35,7 +38,10 @@ def broker(tmp_path: Path, allowlist_file: Path) -> BrokerDaemon:
         allowlist_path=allowlist_file,
         journal_db_path=tmp_path / "journal_recon.db",
     )
-    return BrokerDaemon(cfg)
+    b = BrokerDaemon(cfg)
+    b.session_lock.locked_notebook_id = "nb-recon-001"
+    b.session_lock.state = SessionState.ACTIVE_DISPATCH
+    return b
 
 
 @pytest.mark.asyncio

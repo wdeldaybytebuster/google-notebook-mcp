@@ -43,7 +43,7 @@ def test_get_target_directories_cross_platform() -> None:
 def test_install_manifest_posix(tmp_path: Path) -> None:
     target_1 = tmp_path / "chrome"
     target_2 = tmp_path / "chromium"
-    ext_id = "test_extension_id_12345"
+    ext_id = "a" * 32
     custom_host = tmp_path / "host.py"
     custom_host.touch()
 
@@ -67,7 +67,7 @@ def test_install_manifest_posix(tmp_path: Path) -> None:
 
 def test_install_and_uninstall_windows_mock_registry(tmp_path: Path) -> None:
     target = tmp_path / "win_target"
-    ext_id = "windows_extension_id"
+    ext_id = "b" * 32
     custom_host = tmp_path / "host.py"
     custom_host.touch()
 
@@ -85,9 +85,10 @@ def test_install_and_uninstall_windows_mock_registry(tmp_path: Path) -> None:
     )
 
     assert len(installed) == 1
-    assert len(registry_calls) == 1
-    assert HOST_NAME in registry_calls[0][0]
-    assert registry_calls[0][1] == str(installed[0].resolve())
+    assert len(registry_calls) == 4
+    for key, val in registry_calls:
+        assert HOST_NAME in key
+        assert val == str(installed[0].resolve())
 
     # Now uninstall
     deleted_reg_keys: list[str] = []
@@ -103,12 +104,12 @@ def test_install_and_uninstall_windows_mock_registry(tmp_path: Path) -> None:
 
     assert len(removed) == 1
     assert not installed[0].exists()
-    assert len(deleted_reg_keys) == 1
+    assert len(deleted_reg_keys) == 4
 
 
 def test_installer_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target_dir = tmp_path / "custom_native_hosts"
-    ext_id = "cli_extension_test_id"
+    ext_id = "c" * 32
 
     # Test install
     code = main([
@@ -133,7 +134,7 @@ def test_installer_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_installer_browser_config_dir(tmp_path: Path) -> None:
     browser_dir = tmp_path / "google-chrome-beta"
-    ext_id = "beta_extension_test_id"
+    ext_id = "d" * 32
 
     code = main([
         "--extension-id",
@@ -144,4 +145,21 @@ def test_installer_browser_config_dir(tmp_path: Path) -> None:
     assert code == 0
     manifest_file = browser_dir / "NativeMessagingHosts" / f"{HOST_NAME}.json"
     assert manifest_file.exists()
+
+
+def test_validate_extension_id() -> None:
+    from mcp_gateway.host.installer import validate_extension_id
+
+    assert validate_extension_id("a" * 32) is True
+    assert validate_extension_id("ipcamaaigfpmjogninmpnahfipggnnkf") is True
+    assert validate_extension_id("A" * 32) is False  # Uppercase forbidden
+    assert validate_extension_id("a" * 31) is False  # Too short
+    assert validate_extension_id("a" * 33) is False  # Too long
+    assert validate_extension_id("test_extension_id_12345") is False  # Invalid chars
+
+
+def test_invalid_extension_id_raises() -> None:
+    with pytest.raises(ValueError, match="Invalid extension_id"):
+        generate_manifest(extension_id="invalid-id")
+
 

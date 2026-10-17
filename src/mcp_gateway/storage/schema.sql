@@ -3,12 +3,13 @@
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
+PRAGMA user_version=2;
 
 CREATE TABLE IF NOT EXISTS mutation_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     request_key TEXT NOT NULL UNIQUE,
     notebook_id TEXT NOT NULL,
-    operation_type TEXT NOT NULL CHECK(operation_type IN ('add_source', 'query_notebook')),
+    operation_type TEXT NOT NULL CHECK(operation_type IN ('add_source', 'query_notebook', 'create_note', 'delete_note')),
     payload_hash TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'prepared' CHECK(state IN ('prepared', 'sent', 'confirmed', 'rejected', 'unknown')),
     assigned_source_id TEXT,

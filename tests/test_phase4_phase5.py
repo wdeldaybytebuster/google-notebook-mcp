@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon, McpFacade
+from mcp_gateway.broker.session import SessionState
 from mcp_gateway.engine.readiness_poller import (
     SourceStatus,
     parse_source_status,
@@ -30,11 +31,13 @@ from mcp_gateway.schemas.tools import (
     LIST_NOTEBOOKS_SCHEMA,
     LIST_SOURCES_SCHEMA,
     QUERY_NOTEBOOK_SCHEMA,
+    SELECT_NOTEBOOK_SCHEMA,
     AddSourceInput,
     GetNotebookMetadataInput,
     ListNotebooksInput,
     ListSourcesInput,
     QueryNotebookInput,
+    SelectNotebookInput,
     SourceSpec,
     validate_tool_args,
 )
@@ -61,7 +64,10 @@ def broker(tmp_path: Path, allowlist_file: Path) -> BrokerDaemon:
         allowlist_path=allowlist_file,
         journal_db_path=tmp_path / "test_phase45.db",
     )
-    return BrokerDaemon(cfg)
+    b = BrokerDaemon(cfg)
+    b.session_lock.locked_notebook_id = "nb-1"
+    b.session_lock.state = SessionState.ACTIVE_DISPATCH
+    return b
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +166,9 @@ async def test_list_notebooks_pagination(broker: BrokerDaemon) -> None:
     ]
     frame = [["wrb.fr", "wXbhsf", json.dumps(raw_notebooks), None, None, None, None, 1]]
     fake_body = ")]}'\n" + json.dumps(frame)
+
+    broker.session_lock.state = SessionState.DISCOVERY_ONLY
+    broker.session_lock.locked_notebook_id = None
 
     with patch.object(
         broker,
@@ -485,3 +494,14 @@ def test_pydantic_closed_models_validation() -> None:
         SourceSpec.model_validate({"type": "invalid_type"})
     with pytest.raises(ValidationError):
         SourceSpec.model_validate({"type": "text", "extra": "not_allowed"})
+
+    # 6. select_notebook
+    valid_sn = SelectNotebookInput(notebook_id="00000000-0000-0000-0000-000000000002")
+    assert valid_sn.notebook_id == "00000000-0000-0000-0000-000000000002"
+    with pytest.raises(ValidationError):
+        SelectNotebookInput.model_validate({
+            "notebook_id": "00000000-0000-0000-0000-000000000002",
+            "extra_field": "disallowed",
+        })
+    with pytest.raises(ValidationError):
+        SelectNotebookInput(notebook_id="")

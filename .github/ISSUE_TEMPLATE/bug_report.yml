@@ -1,0 +1,76 @@
+name: Bug Report
+description: Report an issue or unexpected behavior in Google Notebook MCP
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue!
+        **SECURITY REMINDER**: NEVER include real Google session cookies (`SID`, `HSID`, `SSID`), CSRF tokens (`SNlM0e`), or passwords in your logs or issue description.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: When I invoke query_notebook, the stream terminates prematurely...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux (Ubuntu / Debian)
+        - Linux (ChromeOS Crostini)
+        - Linux (Fedora / Arch / Other)
+        - macOS (Apple Silicon - M1/M2/M3)
+        - macOS (Intel)
+        - Windows 11
+        - Windows 10
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: AI Client
+      options:
+        - Claude Code
+        - Cursor
+        - Windsurf
+        - Cline / Roo Code
+        - Antigravity IDE
+        - Zed
+        - Other (specify below)
+    validations:
+      required: true
+
+  - type: input
+    id: chrome_version
+    attributes:
+      label: Chrome Version
+      placeholder: "e.g. 128.0.6613.119 (Official Build) beta"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this behavior?
+      placeholder: |
+        1. Run 'gemini-notebook-mcp launch'
+        2. In Cursor, run tool 'select_notebook' with ID '...'
+        3. See error envelope...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized Logs
+      description: Paste terminal output or broker logs here. Ensure all tokens are redacted.
+      render: shell

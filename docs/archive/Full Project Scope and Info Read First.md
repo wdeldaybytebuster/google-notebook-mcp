@@ -13,7 +13,7 @@ The Google Gemini Notebook Model Context Protocol (MCP) gateway architecture is 
 |  \* Process Facade: stdio JSON-RPC 2.0 engine (protocol-only on stdout; diagnostic logging stderr) \[1, 5\]  
 |  \* Mandatory Allowlist Enforcement (\~/.config/notebooklm-mcp-bridge/allowlist.json) \[5, 6\]    |  
 |  \* Conservative SQLite Mutation Journal: prepared \-\> sent \-\> confirmed / rejected / unknown \[7, 8\]  
-|  \* Consolidated 5-Tool Closed JSON Schema Surface (list\_notebooks, get\_metadata, ...) \[9, 10\]   |  
+|  \* Consolidated 9-Tool Closed JSON Schema Surface (list\_notebooks, select\_notebook, ...) \[9, 10\]|  
 |  \* Host Governance Caps: UV\_THREADPOOL\_SIZE=3, ulimit \-n 65536, zero unencrypted storage \[11, 12\]|  
 \+-------------------------------------------------+-------------------------------------------------+  
                                                   |  
@@ -73,17 +73,21 @@ The Google Gemini Notebook Model Context Protocol (MCP) gateway architecture is 
 3. *Metadata, Ingestion, & Management*: Dispatched through the positional batchexecute envelope (POST /\_/LabsTailwindUi/data/batchexecute) transmitting URL-encoded f.req form arrays 17, 21\.  
 4. *Grounded Querying*: Dispatched to the dedicated server-streaming gRPC endpoint (POST /\_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1.LabsTailwindOrchestrationService/GenerateFreeFormStreamed) 22, 25\. In headless fallback mode, this endpoint must use an **isolated HTTP client cookie jar** to prevent session poisoning and HTTP 401 failures caused by batchexecute Set-Cookie responses 25\.
 
-### Pillar C: Consolidated 5-Tool MCP Surface
+### Pillar C: Consolidated 9-Tool MCP Surface
 
-The external tool surface exposed to LLM coding agents is strictly consolidated into five closed JSON schemas (additionalProperties: false) to eliminate context window bloat and tool-selection hallucinations 4, 9, 10, 35:
+The external tool surface exposed to LLM coding agents is strictly consolidated into nine closed JSON schemas (additionalProperties: false, extra="forbid") to eliminate context window bloat and tool-selection hallucinations 4, 9, 10, 35:
 
-1. **list\_notebooks**: Ingests optional snapshot pagination arguments (page\_size, cursor) and returns visible, allowlisted notebooks (id, title, url, role, source\_count) decoded from wXbhsf response rows 24, 36, 37\.  
-2. **get\_notebook\_metadata**: Decodes comprehensive metadata for an approved notebook\_id from the rLM1Ne row shape 24, 37, 38\.  
-3. **list\_sources**: Extracts normalized source records (text, web, youtube, drive, file) and readiness states (processing, ready, failed) directly from notebook metadata returned by rLM1Ne row \[39\] 24, 37, 38, 40\.  
-4. **query\_notebook**: Submits natural language queries (question, request\_key, optional source\_ids) to GenerateFreeFormStreamed, returning answers with source grounding citations 22, 37, 38, 41\.  
-5. **add\_source**: Ingests knowledge via polymorphic payloads (text, url, youtube, drive, file via pre-approved upload handle) backed by broker-side idempotency verification 24, 37, 42, 43\.
+1. **select\_notebook**: Enforces ADR-011 single-notebook session lock (`notebook_id` or `title`). Supports `save_for_project: bool = True` to save selection to `.notebook_mcp.json` in project root. Serialized via `_session_mutex` (M-01). Transitions from `DISCOVERY_ONLY` to `ACTIVE_DISPATCH`.  
+2. **list\_notebooks**: Ingests optional snapshot pagination arguments (page\_size, cursor) and returns visible, allowlisted notebooks decoded from wXbhsf response rows. When locked, filters results to the active notebook. Inspects `.notebook_mcp.json` to return `project_config` and an actionable `user_prompt` directing the AI assistant to double-check selection with the user at the start of each chat.  
+3. **get\_notebook\_metadata**: Decodes comprehensive metadata for the approved locked notebook from the rLM1Ne row shape.  
+4. **list\_sources**: Extracts normalized source records and readiness states directly from notebook metadata returned by rLM1Ne row [102].  
+5. **query\_notebook**: Submits natural language queries (question, request\_key, optional source\_ids) to GenerateFreeFormStreamed, returning answers with verified citation spans. Enforces strict citation grounding barrier (M-06), scoped readiness (M-10), and mid-stream error deltas (P-01). Preserves un-hashed `_meta.mcp_correlation_id` (P-04).  
+6. **add\_source**: Ingests knowledge via polymorphic payloads (text, url, youtube, drive, file) backed by broker-side idempotency verification, pre-flight email guard (P-03), and Full Jitter Exponential Backoff polling.  
+7. **create\_note**: Creates user note via CYK0Xb RPC (title, content, idempotency\_key). Journaled in SQLite FSM.  
+8. **list\_notes**: Extracts user notes from rLM1Ne row [0][17]. Enforces loud failure canary (`UPSTREAM_SCHEMA_DRIFT`) on array shape drift (M-05).  
+9. **delete\_note**: Deletes user note via tGMBJ RPC (note\_id, idempotency\_key). Journaled in SQLite FSM.  
 
-All tools enforce closed schemas and emit standard structured failure envelopes ({ "ok": false, "error": { "code", "message", "retryable" } }) 43\.
+All tools enforce closed schemas and emit standard structured failure envelopes ({ "ok": false, "error": { "code", "message", "retryable" } }).
 
 ### Pillar D: Security Invariants, Mutation Journaling, & Edge Governance
 
@@ -308,15 +312,19 @@ Source ingestion is asynchronous. Status is tracked in rLM1Ne row 39 index 4 usi
 3. Append x-goog-authuser: {N} header on Scotty upload requests.  
 4. Verify window.WIZ\_global\_data.oM1Kwf against the user's expected account email; fail closed with PERMISSION\_DENIED on mismatch.
 
-### G. Strict 5-Tool Closed JSON Schema Surface
+### G. Strict 9-Tool Closed JSON Schema Surface
 
-The MCP gateway exposes exactly five tools:
+The MCP gateway exposes exactly nine tools (additionalProperties: false, extra="forbid"):
 
-1. list\_notebooks: { page\_size?: int, cursor?: string }  
-2. get\_notebook\_metadata: { notebook\_id: string }  
-3. list\_sources: { notebook\_id: string, page\_size?: int, cursor?: string }  
-4. query\_notebook: { notebook\_id: string, question: string, request\_key: string, source\_ids?: string, timeout\_seconds?: int }  
-5. add\_source: { notebook\_id: string, idempotency\_key: string, source: polymorphic(text|url|youtube|drive|file), wait\_until\_ready?: bool }
+1. select\_notebook: { notebook\_id?: string, title?: string }
+2. list\_notebooks: { page\_size?: int, cursor?: string }  
+3. get\_notebook\_metadata: { notebook\_id: string }  
+4. list\_sources: { notebook\_id: string, page\_size?: int, cursor?: string }  
+5. query\_notebook: { notebook\_id: string, question: string, request\_key: string, source\_ids?: list[string], timeout\_seconds?: int }  
+6. add\_source: { notebook\_id: string, idempotency\_key: string, source: polymorphic(text|url|youtube|drive|file), wait\_until\_ready?: bool }
+7. create\_note: { notebook\_id: string, title?: string, content: string, idempotency\_key: string }
+8. list\_notes: { notebook\_id: string, page\_size?: int, cursor?: string }
+9. delete\_note: { notebook\_id: string, note\_id: string, idempotency\_key: string }
 
 ## 2\. MULTI-AGENT SUB-SYSTEM DELEGATION
 
@@ -413,4 +421,31 @@ With the six living specification files published to the Studio panel and the Ma
 
 \---
 
-🎯 Would you like to proceed with writing the unit test harness for the \*\*\`BatchexecuteStreamDecoder\`\*\* and generating synthetic JSON fixtures to validate anti-XSSI stripping and chunk reassembly offline?
+### 6. Architecture & Implementation Completion Addendum (Phases A, B, and Phase 6 Inverted Hierarchy)
+
+Following the core initial phases, the system completed major architectural hardening and documentation restructuring milestones:
+
+1. **Phase A: Universal Local IPC Transport & Multi-Browser Registry**
+   - Implemented cross-platform IPC path resolution in `src/mcp_gateway/transport/paths.py` supporting Windows Named Pipes (`\\.\pipe\notebooklm-mcp-broker`), Linux XDG sockets (`$XDG_RUNTIME_DIR/notebooklm-mcp/broker.sock`, permissions `0o700`), macOS Application Support, and `MCP_BROKER_SOCKET` environment overrides.
+   - Built unified async `IpcServer` protocol and client connection factories in `src/mcp_gateway/transport/ipc.py`.
+   - Developed multi-browser native host setup utility (`src/mcp_gateway/host/installer.py`) supporting Google Chrome, Google Chrome Beta, Chromium, Brave, and Microsoft Edge across Linux, macOS, and Windows.
+
+2. **Phase B: ADR-011 Mandatory Interactive Single-Notebook Session Lock FSM**
+   - Enforces strict two-phase session state machine in `src/mcp_gateway/broker/session.py` (`DISCOVERY_ONLY` -> `ACTIVE_DISPATCH`).
+   - Closed 9-tool MCP facade: `select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `query_notebook`, `add_source`, `create_note`, `list_notes`, `delete_note`.
+   - All tool schemas strictly enforce `additionalProperties: false` (JSON Schema) and `extra="forbid"` (Pydantic v2).
+   - Calling notebook operations before `select_notebook` fails-closed with `SESSION_UNLOCKED`.
+   - Post-lock operations validate and overwrite `notebook_id` from the locked session, preventing session hopping (`SESSION_LOCKED`).
+   - Post-lock `list_notebooks` calls filter results to the active notebook, guaranteeing context isolation.
+
+3. **Phase 6: Inverted Hierarchy & Complete Architectural Reconciliation (Domain F)**
+   - Master Architecture Blueprint and Root Causes Identified and Resolved ledger (M-01 through M-10, P-01 through P-04) positioned on Page 1 of `docs/architecture.md`.
+   - Signposted 4-Phase Research Progression (Phase 1 Token Containment, Phase 2 IPC Topology, Phase 3 Protocol Decoders, Phase 4 Session Lock & Mutation Journaling).
+   - Full documentation of all 16 Architecture Decision Records (ADR-001 through ADR-016).
+   - Complete 9-tool MCP catalog with closed schemas and error taxonomy.
+   - Raw wire traces, framing bytes, and HTTP headers segregated into dedicated Appendix.
+
+4. **Verification Milestones**
+   - 100% clean static type check under `mypy --strict src tests` across 50 source files (0 errors).
+   - 100% passing test suite across 153 unit, hermetic, and integration tests (`pytest -v`).
+   - Live in-situ validation on Google NotebookLM confirming real-time session locking, source ingestion, notes CRUD, and streaming grounded responses.

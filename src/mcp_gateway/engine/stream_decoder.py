@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import codecs
 import json
+import sys
 from typing import Any
 
 
@@ -142,13 +144,22 @@ class BatchexecuteStreamDecoder:
                         results.append({"rpc_id": frame[1], "data": inner})
                 elif frame_type == "e":
                     # frame shape: ['e', [[error_code, message, ...]]]
-                    error_code = -1
                     if len(frame) >= 2 and isinstance(frame[1], list):
+                        error_code = -1
                         inner_list = frame[1]
                         if inner_list and isinstance(inner_list[0], list):
                             code_candidate = inner_list[0][0] if inner_list[0] else -1
                             if isinstance(code_candidate, int):
                                 error_code = code_candidate
+                        raise StreamDecodeError(
+                            f"batchexecute error frame received (code={error_code})",
+                            error_code=error_code,
+                        )
+                    # Normal completion frame: ['e', chunk_count, None, None, byte_len] -> ignore
+                elif frame_type == "er":
+                    # frame shape: ['er', null, null, null, null, error_code]
+                    code_candidate = frame[5] if len(frame) > 5 else -1
+                    error_code = code_candidate if isinstance(code_candidate, int) else -1
                     raise StreamDecodeError(
                         f"batchexecute error frame received (code={error_code})",
                         error_code=error_code,
@@ -173,6 +184,9 @@ class GenerateFreeFormStreamParser:
 
     def __init__(self) -> None:
         self._line_buffer: str = ""
+        self._last_cumulative_text: str = ""
+        self._is_terminated_cleanly: bool = False
+        self._utf8_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def feed(self, chunk: bytes) -> list[dict[str, Any]]:
         """Append *chunk* and return any complete event dicts extracted.
@@ -188,7 +202,7 @@ class GenerateFreeFormStreamParser:
             Decoded event dicts with key ``type`` set to ``'text_delta'``,
             ``'citation'``, or ``'done'``.
         """
-        self._line_buffer += chunk.decode("utf-8", errors="replace")
+        self._line_buffer += self._utf8_decoder.decode(chunk, final=False)
         results: list[dict[str, Any]] = []
 
         while "\n" in self._line_buffer:
@@ -202,18 +216,95 @@ class GenerateFreeFormStreamParser:
                 continue
             parsed = self._classify(record)
             if parsed is not None:
-                results.append(parsed)
+                parsed_list = parsed if isinstance(parsed, list) else [parsed]
+                for item in parsed_list:
+                    if item.get("type") == "done":
+                        self._is_terminated_cleanly = True
+                    results.append(item)
+            else:
+                rec_str = json.dumps(record)
+                if len(rec_str) > 10 and not rec_str.startswith('[["wrb.fr"'):
+                    print(f"[stream_decoder unclassified]: {rec_str[:300]}", file=sys.stderr)
 
         return results
 
-    def _classify(self, record: Any) -> dict[str, Any] | None:
-        """Classify a parsed JSON record into an event dict."""
+    def finalize(self) -> list[dict[str, Any]]:
+        """Invoked on stream closure to detect abrupt mid-stream severance (P-01).
+
+        If the stream ended without receiving Google's clean done delimiter,
+        emits an explicit error delta frame so downstream clients do not hang.
+        """
+        # Flush any trailing bytes from incremental decoder
+        self._line_buffer += self._utf8_decoder.decode(b"", final=True)
+        if not self._is_terminated_cleanly and not self._last_cumulative_text:
+            return [
+                {
+                    "type": "error_delta",
+                    "error": {
+                        "code": "STREAM_SEVERED",
+                        "message": "Stream severed unexpectedly by upstream transport.",
+                        "retryable": True,
+                    },
+                }
+            ]
+        return []
+
+    def _classify(self, record: Any) -> list[dict[str, Any]] | dict[str, Any] | None:
+        """Classify a parsed JSON record into one or more event dicts."""
         if not isinstance(record, list) or not record:
             return None
 
-        # Top-level structure varies; we inspect known positions.
-        # Text deltas typically appear at record[0][0] as a string.
-        # Citation blocks appear as nested arrays with coordinate sub-arrays.
+        # Check for done sentinel or completion indicators (di / null / empty)
+        if (len(record) >= 1 and record[0] is None and len(record) == 1) or record == []:
+            return {"type": "done"}
+        if len(record) > 0 and record[0] == "di":
+            return {"type": "done"}
+        if len(record) > 0 and isinstance(record[0], list) and record[0] and record[0][0] == "di":
+            return {"type": "done"}
+
+        # Check for batchexecute-wrapped wrb.fr record: [['wrb.fr', None, 'JSON_STR', ...]]
+        if (
+            len(record) > 0
+            and isinstance(record[0], list)
+            and len(record[0]) > 2
+            and record[0][0] == "wrb.fr"
+            and isinstance(record[0][2], str)
+        ):
+            events: list[dict[str, Any]] = []
+            try:
+                inner_data = json.loads(record[0][2])
+                cits = self._extract_citations(inner_data)
+                if cits:
+                    events.append({"type": "citation", "citations": cits})
+
+                if isinstance(inner_data, list):
+                    if (
+                        len(inner_data) > 0
+                        and isinstance(inner_data[0], list)
+                        and len(inner_data[0]) > 4
+                        and isinstance(inner_data[0][4], list)
+                    ):
+                        ast_cits = self._extract_ast_citations(inner_data[0][4])
+                        if ast_cits and not cits:
+                            events.append({"type": "citation", "citations": ast_cits})
+
+                    text_candidate = inner_data[0][0]
+                    if isinstance(text_candidate, str):
+                        if text_candidate.startswith(self._last_cumulative_text):
+                            delta = text_candidate[len(self._last_cumulative_text):]
+                            self._last_cumulative_text = text_candidate
+                            if delta:
+                                events.append({"type": "text_delta", "text": delta})
+                        else:
+                            self._last_cumulative_text = text_candidate
+                            if text_candidate:
+                                events.append({"type": "text_delta", "text": text_candidate})
+            except Exception:
+                pass
+
+            if events:
+                return events
+            return None
 
         # Check for done sentinel.
         if len(record) >= 1 and record[0] is None and len(record) == 1:
@@ -223,6 +314,8 @@ class GenerateFreeFormStreamParser:
         if isinstance(record[0], list):
             inner = record[0]
             if inner and isinstance(inner[0], str):
+                if inner[0] in ("wrb.fr", "di", "af.httprm", "e", "er"):
+                    return None
                 return {"type": "text_delta", "text": inner[0]}
 
             # Citation coordinates: inner contains nested lists with int offsets.
@@ -235,6 +328,8 @@ class GenerateFreeFormStreamParser:
 
         # Text delta at record[0] directly.
         if isinstance(record[0], str):
+            if record[0] in ("wrb.fr", "di", "af.httprm", "e", "er"):
+                return None
             return {"type": "text_delta", "text": record[0]}
 
         return None
@@ -270,3 +365,28 @@ class GenerateFreeFormStreamParser:
             return
         for child in node:
             self._walk_for_citations(child, out)
+
+    def _extract_ast_citations(self, ast_root: Any) -> list[dict[str, Any]]:
+        """Walk Google's rich-text AST to extract coordinate spans for grounding."""
+        spans: list[dict[str, Any]] = []
+        seen: set[tuple[int, int]] = set()
+
+        def _walk(node: Any) -> None:
+            if not isinstance(node, list):
+                return
+            if (
+                len(node) >= 2
+                and isinstance(node[0], int)
+                and isinstance(node[1], int)
+                and node[1] > node[0] >= 0
+            ):
+                key = (node[0], node[1])
+                if key not in seen:
+                    seen.add(key)
+                    spans.append({"source_id": "", "utf16_start": node[0], "utf16_end": node[1]})
+                return
+            for child in node:
+                _walk(child)
+
+        _walk(ast_root)
+        return spans

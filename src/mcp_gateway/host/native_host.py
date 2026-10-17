@@ -18,9 +18,18 @@ import base64
 import json
 import math
 import os
+from pathlib import Path
 import struct
 import sys
 from typing import BinaryIO
+import uuid
+
+# Ensure src/ is importable when executed directly by Chrome Native Messaging
+_src_root = str(Path(__file__).resolve().parent.parent.parent)
+if _src_root not in sys.path:
+    sys.path.insert(0, _src_root)
+
+from mcp_gateway.transport import get_default_ipc_path, open_ipc_connection
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -28,9 +37,9 @@ from typing import BinaryIO
 
 CHROME_FRAME_FORMAT: str = "@I"   # native-endian 4-byte unsigned int
 IPC_FRAME_FORMAT: str = ">I"      # big-endian 4-byte unsigned int
-MAX_MESSAGE_SIZE: int = 1024 * 1024       # 1 MiB — Chrome's hard limit
+MAX_MESSAGE_SIZE: int = 32 * 1024 * 1024  # 32 MiB — accommodate multi-megabyte responses
 CHUNK_SIZE: int = 512 * 1024              # 512 KiB slice threshold
-IPC_SOCKET_PATH: str = "/tmp/notebooklm-mcp-broker.sock"
+IPC_SOCKET_PATH: str = get_default_ipc_path()
 
 # ---------------------------------------------------------------------------
 # Chrome Native Messaging I/O (sync, native-endian)
@@ -148,17 +157,23 @@ def chunk_message(
 async def connect_to_broker(
     socket_path: str,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """Open a Unix domain socket connection to the broker.
+    """Open an IPC connection (Unix domain socket or Windows Named Pipe) to the broker.
 
     Raises ConnectionRefusedError if the broker is not running.
     """
     try:
-        reader, writer = await asyncio.open_unix_connection(socket_path)
-    except (FileNotFoundError, ConnectionRefusedError) as exc:
+        reader, writer = await open_ipc_connection(socket_path)
+        return reader, writer
+    except (FileNotFoundError, ConnectionRefusedError, OSError) as exc:
+        if sys.platform != "win32" and socket_path != "/tmp/notebooklm-mcp-broker.sock" and os.path.exists("/tmp/notebooklm-mcp-broker.sock"):
+            try:
+                reader, writer = await open_ipc_connection("/tmp/notebooklm-mcp-broker.sock")
+                return reader, writer
+            except Exception:
+                pass
         raise ConnectionRefusedError(
             f"Broker not reachable at {socket_path!r}: {exc}"
         ) from exc
-    return reader, writer
 
 
 async def validate_origin(
@@ -186,6 +201,48 @@ async def validate_origin(
 # ---------------------------------------------------------------------------
 # Main relay loop
 # ---------------------------------------------------------------------------
+
+
+def inject_boundary_idempotency(data: bytes) -> bytes:
+    """Injects a cryptographic UUIDv4 idempotency key into mutation commands if missing."""
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            return data
+        action = parsed.get("action") or parsed.get("command") or parsed.get("operation")
+        if action in ("add_source", "query_notebook"):
+            if not parsed.get("idempotency_key") and not parsed.get("request_key"):
+                new_key = str(uuid.uuid4())
+                parsed["idempotency_key"] = new_key
+                parsed["request_key"] = new_key
+                return json.dumps(parsed).encode("utf-8")
+            elif not parsed.get("idempotency_key") and parsed.get("request_key"):
+                parsed["idempotency_key"] = parsed["request_key"]
+                return json.dumps(parsed).encode("utf-8")
+            elif not parsed.get("request_key") and parsed.get("idempotency_key"):
+                parsed["request_key"] = parsed["idempotency_key"]
+                return json.dumps(parsed).encode("utf-8")
+        return data
+    except Exception:
+        return data
+
+
+def setup_stderr_redirection() -> None:
+    """Redirects sys.stderr to avoid 64KB pipe capacity deadlock when run unmonitored."""
+    try:
+        log_dir = Path.home() / ".config" / "notebooklm-mcp-bridge"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_dir / "native_host_stderr.log", "a", encoding="utf-8", buffering=1)
+        os.dup2(log_file.fileno(), 2)
+        sys.stderr = log_file
+    except Exception:
+        try:
+            null_path = "NUL" if sys.platform == "win32" else "/dev/null"
+            devnull = os.open(null_path, os.O_WRONLY)
+            os.dup2(devnull, 2)
+            sys.stderr = open(null_path, "w", encoding="utf-8")
+        except Exception:
+            pass
 
 
 async def relay_loop(socket_path: str, allowed_extension_id: str) -> None:
@@ -228,7 +285,8 @@ async def relay_loop(socket_path: str, allowed_extension_id: str) -> None:
                     break
 
                 print(f"[native_host] forwarding {len(payload)} bytes from broker to Chrome", file=sys.stderr)
-                write_native_message(sys.stdout.buffer, payload)
+                payload_to_send = inject_boundary_idempotency(payload)
+                write_native_message(sys.stdout.buffer, payload_to_send)
 
         async def chrome_to_broker() -> None:
             while True:
@@ -241,14 +299,15 @@ async def relay_loop(socket_path: str, allowed_extension_id: str) -> None:
                     break
                 except ValueError as exc:
                     print(f"oversized native message rejected: {exc}", file=sys.stderr)
-                    continue
+                    break
                 except Exception as exc:
                     print(f"error reading from stdin: {exc}", file=sys.stderr)
                     break
 
                 print(f"[native_host] forwarding {len(raw_msg)} bytes from Chrome to broker", file=sys.stderr)
+                payload_to_send = inject_boundary_idempotency(raw_msg)
                 try:
-                    await write_ipc_message(writer, raw_msg)
+                    await write_ipc_message(writer, payload_to_send)
                 except Exception as exc:
                     print(f"error writing to broker: {exc}", file=sys.stderr)
                     break
@@ -281,8 +340,12 @@ def main() -> None:
     if sys.platform == "win32":
         import msvcrt
 
-        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)   # type: ignore[attr-defined]
-        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)  # type: ignore[attr-defined]
+        o_binary = getattr(os, "O_BINARY", 0x8000)
+        msvcrt.setmode(sys.stdin.fileno(), o_binary)   # type: ignore[attr-defined]
+        msvcrt.setmode(sys.stdout.fileno(), o_binary)  # type: ignore[attr-defined]
+
+    if os.environ.get("MCP_REDIRECT_STDERR", "1") == "1":
+        setup_stderr_redirection()
 
     os.environ["UV_THREADPOOL_SIZE"] = "3"
 
@@ -291,7 +354,10 @@ def main() -> None:
     if not allowed_extension_id and len(sys.argv) > 1 and sys.argv[1].startswith("chrome-extension://"):
         allowed_extension_id = sys.argv[1].split("://", 1)[1].rstrip("/")
 
-    asyncio.run(relay_loop(socket_path, allowed_extension_id))
+    try:
+        asyncio.run(relay_loop(socket_path, allowed_extension_id))
+    finally:
+        os._exit(0)
 
 
 if __name__ == "__main__":

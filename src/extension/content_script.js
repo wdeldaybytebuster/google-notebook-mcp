@@ -11,14 +11,25 @@
 // DOMContentLoaded — signal readiness to service_worker
 // ---------------------------------------------------------------------------
 
-document.addEventListener('DOMContentLoaded', () => {
-  chrome.runtime.sendMessage({
-    type: 'content_script_ready',
-    url: location.href,
-  }).catch(() => {
-    // Service worker may not be ready yet; silently drop.
-  });
-});
+if (window.__mcp_content_script_active) {
+  // Already active in this isolated world context
+} else {
+  window.__mcp_content_script_active = true;
+
+  function signalReady() {
+    chrome.runtime.sendMessage({
+      type: 'content_script_ready',
+      url: location.href,
+    }).catch(() => {
+      // Service worker may not be ready yet; silently drop.
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', signalReady);
+  } else {
+    signalReady();
+  }
 
 // ---------------------------------------------------------------------------
 // window.addEventListener — relay page-main.js results to service_worker
@@ -78,3 +89,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   sendResponse({ ok: true });
   return false;
 });
+}

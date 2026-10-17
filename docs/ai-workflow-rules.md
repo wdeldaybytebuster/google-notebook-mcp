@@ -42,3 +42,10 @@ Update the relevant documentation files whenever an implementation change occurs
 2. No security invariant defined in `architecture.md` was violated (zero Google session credentials exported).
 3. Type checking passes with zero errors (`mypy --strict` for Python; `tsc --noEmit` for TypeScript).
 4. `progress-tracker.md` accurately reflects the completed work and defines concrete next steps.
+
+#### Closed-Loop NotebookLM Self-Consultation Protocol
+When formulating or revising major architectural plans and implementations:
+1. **Source Ingestion First**: Before requesting architectural feedback, ingest the full project status report and implementation plan directly into the target notebook (`add_source`) with explicit semantic versioning in the title (e.g. `Implementation Plan v2.1`).
+2. **Grounded Source Targeting**: Query NotebookLM (`query_notebook`) referencing the exact ingested source titles by name. Allow 30–60 seconds for complex grounded synthesis.
+3. **Iterative Refinement**: Ingest iterative plan versions into the notebook as distinct sources and query across rounds until all architectural risks, edge cases, and safeguards are resolved.
+4. **Documentation Synchronization & Completion Reporting**: Append all verified decisions to repository documentation (`architecture.md`, `progress-tracker.md`, etc.), formulate a full completion report, and ingest the updated documentation and completion report directly into the notebook's sources for persistent provenance.

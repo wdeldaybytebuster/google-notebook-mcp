@@ -26,10 +26,11 @@ from mcp_gateway.broker.allowlist import (
     load_allowlist,
     save_allowlist,
 )
+from mcp_gateway.transport import get_default_ipc_path, open_ipc_connection
 
 IPC_FRAME_FORMAT = ">I"
 DEFAULT_SOCKET_PATH = os.environ.get(
-    "MCP_BROKER_SOCKET", "/tmp/notebooklm-mcp-broker.sock"
+    "MCP_BROKER_SOCKET", get_default_ipc_path()
 )
 
 
@@ -43,7 +44,7 @@ async def _send_recv(
 ) -> dict[str, Any]:
     """Sends one IPC command to the broker and reads the response."""
     try:
-        reader, writer = await asyncio.open_unix_connection(socket_path)
+        reader, writer = await open_ipc_connection(socket_path)
     except (FileNotFoundError, ConnectionRefusedError, OSError) as exc:
         return {
             "ok": False,

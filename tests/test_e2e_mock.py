@@ -8,7 +8,9 @@ from typing import Any, cast
 import pytest
 
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon, McpFacade
+from mcp_gateway.schemas.error import SESSION_UNLOCKED
 from mcp_gateway.storage.journal import MutationState
+from mcp_gateway.transport import open_ipc_connection
 import mcp.types as types
 
 IPC_FRAME_FORMAT = ">I"
@@ -25,7 +27,7 @@ class MockBrowserCompanion:
         self._running = False
 
     async def start(self) -> None:
-        self._reader, self._writer = await asyncio.open_unix_connection(self.socket_path)
+        self._reader, self._writer = await open_ipc_connection(self.socket_path)
         self._running = True
 
         # Send handshake hello frame
@@ -186,6 +188,34 @@ async def test_hermetic_end_to_end_mcp_flow(
         assert "nb-mock-1" in nb_ids
         assert "nb-mock-2" in nb_ids
         assert "nb-forbidden" not in nb_ids
+
+        # Verify ADR-011 gate: pre-lock call is rejected
+        req_unlocked = types.CallToolRequest(
+            method="tools/call",
+            params=types.CallToolRequestParams(
+                name="get_notebook_metadata",
+                arguments={"notebook_id": "nb-mock-1"},
+            ),
+        )
+        res_unlocked = await call_entry.handler(cast(Any, None), req_unlocked)
+        assert isinstance(res_unlocked, types.CallToolResult)
+        assert res_unlocked.is_error is True
+        assert extract_text_payload(res_unlocked)["error"]["code"] == SESSION_UNLOCKED
+
+        # Lock session via select_notebook
+        req_select = types.CallToolRequest(
+            method="tools/call",
+            params=types.CallToolRequestParams(
+                name="select_notebook",
+                arguments={"notebook_id": "nb-mock-1"},
+            ),
+        )
+        res_select = await call_entry.handler(cast(Any, None), req_select)
+        assert isinstance(res_select, types.CallToolResult)
+        assert res_select.is_error is False
+        body_select = extract_text_payload(res_select)
+        assert body_select["ok"] is True
+        assert body_select["status"] == "LOCKED"
 
         # 4. Test get_notebook_metadata & list_sources
         req_meta = types.CallToolRequest(

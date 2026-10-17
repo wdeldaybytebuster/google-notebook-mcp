@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LIST_NOTEBOOKS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -79,8 +79,8 @@ QUERY_NOTEBOOK_SCHEMA: dict[str, Any] = {
         "timeout_seconds": {
             "type": "integer",
             "minimum": 10,
-            "maximum": 300,
-            "default": 120,
+            "maximum": 900,
+            "default": 600,
         },
     },
 }
@@ -158,14 +158,127 @@ TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
         "destructiveHint": False,
         "idempotentHint": False,
     },
+    "select_notebook": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
+    "create_note": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+    },
+    "list_notes": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
+    "delete_note": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+    },
+}
+
+CREATE_NOTE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["notebook_id", "content", "idempotency_key"],
+    "properties": {
+        "notebook_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "title": {
+            "type": "string",
+            "maxLength": 255,
+        },
+        "content": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+        },
+    },
+}
+
+LIST_NOTES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["notebook_id"],
+    "properties": {
+        "notebook_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+        },
+        "cursor": {
+            "type": "string",
+        },
+    },
+}
+
+DELETE_NOTE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["notebook_id", "note_id", "idempotency_key"],
+    "properties": {
+        "notebook_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "note_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+        },
+    },
+}
+
+SELECT_NOTEBOOK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "notebook_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "title": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "save_for_project": {
+            "type": "boolean",
+            "default": True,
+            "description": "If true, saves this selection to .notebook_mcp.json in the current project root so future chats remember it.",
+        },
+    },
+    "anyOf": [
+        {"required": ["notebook_id"]},
+        {"required": ["title"]},
+    ],
 }
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "list_notebooks": LIST_NOTEBOOKS_SCHEMA,
+    "select_notebook": SELECT_NOTEBOOK_SCHEMA,
     "get_notebook_metadata": GET_NOTEBOOK_METADATA_SCHEMA,
     "list_sources": LIST_SOURCES_SCHEMA,
     "query_notebook": QUERY_NOTEBOOK_SCHEMA,
     "add_source": ADD_SOURCE_SCHEMA,
+    "create_note": CREATE_NOTE_SCHEMA,
+    "list_notes": LIST_NOTES_SCHEMA,
+    "delete_note": DELETE_NOTE_SCHEMA,
 }
 
 
@@ -227,7 +340,7 @@ class QueryNotebookInput(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     request_key: str = Field(min_length=1)
     source_ids: list[str] | None = None
-    timeout_seconds: int = Field(default=120, ge=10, le=300)
+    timeout_seconds: int = Field(default=600, ge=10, le=900)
 
 
 class SourceSpec(BaseModel):
@@ -255,11 +368,62 @@ class AddSourceInput(BaseModel):
     wait_until_ready: bool = False
 
 
+class SelectNotebookInput(BaseModel):
+    """Pydantic schema for select_notebook."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notebook_id: str | None = Field(default=None, min_length=1)
+    title: str | None = Field(default=None, min_length=1)
+    save_for_project: bool = Field(default=True)
+
+    @model_validator(mode="after")
+    def check_at_least_one_identifier(self) -> SelectNotebookInput:
+        if not self.notebook_id and not self.title:
+            raise ValueError("Must provide either 'notebook_id' or 'title'.")
+        return self
+
+
+class CreateNoteInput(BaseModel):
+    """Pydantic schema for create_note."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notebook_id: str = Field(min_length=1)
+    title: str = Field(default="Untitled Note", min_length=1, max_length=255)
+    content: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1)
+
+
+class ListNotesInput(BaseModel):
+    """Pydantic schema for list_notes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notebook_id: str = Field(min_length=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+    cursor: str | None = None
+
+
+class DeleteNoteInput(BaseModel):
+    """Pydantic schema for delete_note."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notebook_id: str = Field(min_length=1)
+    note_id: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1)
+
+
 PYDANTIC_TOOL_MODELS: dict[str, type[BaseModel]] = {
     "list_notebooks": ListNotebooksInput,
     "get_notebook_metadata": GetNotebookMetadataInput,
     "list_sources": ListSourcesInput,
     "query_notebook": QueryNotebookInput,
     "add_source": AddSourceInput,
+    "select_notebook": SelectNotebookInput,
+    "create_note": CreateNoteInput,
+    "list_notes": ListNotesInput,
+    "delete_note": DeleteNoteInput,
 }
 

@@ -71,7 +71,7 @@ async function main() {
   execSync(`.venv/bin/python -m mcp_gateway.cli install --extension-id ${ext.id} --browser-config-dir "$HOME/.config/google-chrome-beta-mcp"`, { stdio: "inherit" });
 
   console.log("[WATCHER] Running 5-tool live qualification smoke test...");
-  const notebookId = "3e3c08b5-7e5c-4189-9923-81933a256f54";
+  const notebookId = process.env.NOTEBOOK_ID || "00000000-0000-0000-0000-000000000001";
   const proc = spawn(".venv/bin/python", ["scripts/live_smoke_test.py", notebookId], { stdio: "inherit" });
   proc.on("close", (code) => {
     process.exit(code);

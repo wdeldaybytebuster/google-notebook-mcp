@@ -1,0 +1,33 @@
+name: Feature Request
+description: Propose a new feature, tool, or capability for Google Notebook MCP
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Google Notebook MCP!
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: A clear and concise description of the problem or limitation you are facing.
+      placeholder: I want to be able to... but currently...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution / Ideal Behavior
+      description: Describe how you want this feature to work and what tools/parameters it should touch.
+      placeholder: Add a new parameter to add_source...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Solutions Considered
+      description: Describe any alternative approaches or workarounds you have considered.

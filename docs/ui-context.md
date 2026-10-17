@@ -40,6 +40,7 @@ All interface components, extension popups, and webviews must strictly utilize t
   * `ConnectionHealthBadge`: Displays live IPC status (`Connected`, `Reconnecting`, `Disconnected`).
   * `AccountSelector`: Displays authenticated Google profile (`oM1Kwf`) and active `authuser` index.
   * `NotebookAllowlistCard`: Interactive checklist allowing users to approve/revoke specific notebooks into `allowlist.json`.
+  * `ActiveSessionLockBadge`: Displays active locked notebook ID, HMAC session token indicator, and lock status under ADR-011.
   * `SourceReadinessIndicator`: Animated pill displaying indexing status (`PREPARING`, `PROCESSING`, `READY`, `FAILED`).
   * `SecurityAuditDrawer`: Collapsible view confirming zero cookies exported and active DBSC TPM status.
 

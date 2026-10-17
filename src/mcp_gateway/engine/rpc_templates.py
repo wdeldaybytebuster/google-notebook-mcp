@@ -109,7 +109,14 @@ def make_get_metadata_payload(notebook_id: str) -> str:
     str
         JSON-serialised positional parameter array.
     """
-    payload: list[Any] = [notebook_id, None, [[1], [2], [3]], None, 0]
+    payload: list[Any] = [
+        notebook_id,
+        None,
+        [2, None, [1], [1, None, None, None, None, None, None, None, None, None, [1, 3]]],
+        None,
+        0,
+        [[None, None, []]],
+    ]
     return json.dumps(payload)
 
 
@@ -136,8 +143,8 @@ def make_add_url_payload(url: str, notebook_id: str) -> str:
     return json.dumps(payload)
 
 
-def make_add_text_payload(title: str, content: str) -> str:
-    """Build the JSON params for the ``izAoDd`` add-pasted-text RPC.
+def make_add_text_payload(title: str, content: str, notebook_id: str = "") -> str:
+    """Build the JSON params for the add-pasted-text RPC.
 
     Parameters
     ----------
@@ -145,13 +152,26 @@ def make_add_text_payload(title: str, content: str) -> str:
         Display title for the pasted text source.
     content:
         The text content to ingest.
+    notebook_id:
+        Optional target notebook UUID.
 
     Returns
     -------
     str
         JSON-serialised positional parameter array.
     """
-    payload: list[Any] = [None, [title, content], None, 2]
+    if notebook_id:
+        payload: list[Any] = [
+            notebook_id,
+            content,
+            [1, None, None, None, None, None, 1],
+            None,
+            title,
+            None,
+            [2, None, [1], [1, None, None, None, None, None, None, None, None, None, [1, 3]]],
+        ]
+    else:
+        payload = [None, [title, content], None, 2]
     return json.dumps(payload)
 
 
@@ -220,6 +240,49 @@ def make_delete_source_payload(source_id: str) -> str:
     return json.dumps(payload)
 
 
+def make_create_note_payload(title: str, content: str, notebook_id: str) -> str:
+    """Build the JSON params for the ``CYK0Xb`` create-note RPC.
+
+    Parameters
+    ----------
+    title:
+        Display title for the note.
+    content:
+        The text content of the note.
+    notebook_id:
+        The UUID of the target notebook.
+
+    Returns
+    -------
+    str
+        JSON-serialised positional parameter array.
+    """
+    payload: list[Any] = [notebook_id, title, content]
+    return json.dumps(payload)
+
+
+def make_delete_note_payload(note_id: str, notebook_id: str = "") -> str:
+    """Build the JSON params for the ``tGMBJ`` delete-note RPC.
+
+    Parameters
+    ----------
+    note_id:
+        The UUID of the note to delete.
+    notebook_id:
+        Optional target notebook UUID.
+
+    Returns
+    -------
+    str
+        JSON-serialised positional parameter array.
+    """
+    if notebook_id:
+        payload: list[Any] = [[[note_id]], notebook_id, [58]]
+    else:
+        payload = [[[note_id]], [58]]
+    return json.dumps(payload)
+
+
 # ---------------------------------------------------------------------------
 # GenerateFreeFormStreamed query params builder
 # ---------------------------------------------------------------------------
@@ -236,9 +299,9 @@ def make_query_params(
     sources: list[str],
     question: str,
     notebook_id: str,
-    session_id: str | None,
-    message_id: str,
-    history: list[tuple[str, str]],
+    session_id: str | None = None,
+    message_id: str | None = None,
+    history: list[tuple[str, str]] | None = None,
 ) -> str:
     """Build the JSON params for the ``GenerateFreeFormStreamed`` query RPC.
 
@@ -259,7 +322,7 @@ def make_query_params(
         The server-assigned conversation session UUID from a prior turn
         (``hPTbtc``), or ``None`` for a new conversation.
     message_id:
-        A client-generated UUID uniquely identifying this message.
+        Optional client-generated UUID.
     history:
         Prior conversation turns as ``(answer, query)`` pairs in
         **newest-first** order.
@@ -275,19 +338,20 @@ def make_query_params(
     # Conversation history: alternating [answer, null, 2], [query, null, 1]
     # newest-first.
     history_entries: list[Any] = []
-    for answer, query in history:
-        history_entries.append([answer, None, 2])
-        history_entries.append([query, None, 1])
+    if history:
+        for answer, query in history:
+            history_entries.append([answer, None, 2])
+            history_entries.append([query, None, 1])
 
     params: list[Any] = [
         nested_sources,           # [0]  sources: triple-nested
         question,                 # [1]  user query string  (index 48 in wire)
-        history_entries,          # [2]  conversation history, newest-first (index 28)
-        [None, None, None, None, 120],  # [3]  request context (verbosity=120) (index 1)
-        session_id,               # [4]  server conversation UUID or null (index 2)
-        message_id,               # [5]  client message UUID (index 21)
-        None,                     # [6]  reserved (index 24)
-        notebook_id,              # [7]  target notebook UUID (index 26)
-        1,                        # [8]  origin=QUERY_ORIGIN_CHAT_TEXT_BOX (index 42)
+        history_entries,          # [2]  conversation history (must be list [], not None)
+        [2, None, [1], [1, None, None, None, None, None, None, None, None, None, [1, 3]]],  # [3]  context options
+        session_id,               # [4]  server conversation UUID or null
+        message_id,               # [5]  client message UUID
+        None,                     # [6]  reserved
+        notebook_id,              # [7]  target notebook UUID
+        1,                        # [8]  origin=QUERY_ORIGIN_CHAT_TEXT_BOX
     ]
     return json.dumps(params)

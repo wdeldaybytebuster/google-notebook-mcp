@@ -29,6 +29,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 CHROME_BETA_CANDIDATES = [
+    "/opt/google/chrome-beta/chrome",
     "/usr/bin/google-chrome-beta",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium-browser",
@@ -99,7 +100,7 @@ load_env_file()
 async def _cdp_check_auth(cdp_port: int, timeout_s: float) -> bool:
     """Queries Chrome DevTools JSON endpoint to detect a signed-in session.
 
-    Returns True if notebook.google.com is open and NOT redirected to accounts.google.com.
+    Returns True if notebook.google.com is open and NOT redirected to accounts.google.com signin.
     Returns False if unauthenticated or Chrome is not yet reachable.
     """
     import urllib.request
@@ -126,14 +127,51 @@ async def _cdp_check_auth(cdp_port: int, timeout_s: float) -> bool:
     except Exception:
         return False
 
-    for page in pages:
+    # Filter out iframes (e.g. accounts.google.com/RotateCookiesPage embedded in notebook)
+    top_pages = [p for p in pages if p.get("type") != "iframe"]
+
+    # If any top-level tab is on accounts.google.com, Google sign-in is in progress
+    if any("accounts.google.com" in p.get("url", "") for p in top_pages):
+        return False
+
+    for page in top_pages:
         url = page.get("url", "")
         if "notebook.google.com" in url or "notebooklm.google.com" in url:
-            if "accounts.google.com" not in url:
-                return True
-            return False
+            return True
 
     return False
+
+
+async def _cdp_load_unpacked_extension(cdp_port: int, extension_dir: Path) -> str:
+    """Loads unpacked extension via CDP browser WebSocket (required for Chrome v137+)."""
+    import urllib.request
+    try:
+        import websockets
+    except ImportError:
+        return ""
+
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{cdp_port}/json/version", timeout=2
+            ) as resp:
+                ver = json.loads(resp.read().decode("utf-8"))
+            ws_url = ver.get("webSocketDebuggerUrl")
+            if ws_url:
+                async with websockets.connect(ws_url) as ws:
+                    req = {
+                        "id": 1,
+                        "method": "Extensions.loadUnpacked",
+                        "params": {"path": str(extension_dir)},
+                    }
+                    await ws.send(json.dumps(req))
+                    reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=5.0))
+                    return str(reply.get("result", {}).get("id", ""))
+        except Exception:
+            await asyncio.sleep(0.5)
+
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -191,9 +229,12 @@ class DedicatedBrowserLauncher:
             NOTEBOOK_URL,
         ]
         # In containerized / Crostini environments without unprivileged zygote namespaces,
-        # --no-sandbox is required to allow Sommelier Wayland bridging and prevent core dumps.
+        # --no-sandbox, --no-zygote, and --disable-dev-shm-usage prevent zygote namespace crashes
+        # and GPU thread lockups while allowing clean Sommelier Wayland window mapping.
         if os.environ.get("CHROME_NO_SANDBOX") == "1" or Path("/usr/bin/sommelier").is_file():
             args.insert(1, "--no-sandbox")
+            args.insert(2, "--no-zygote")
+            args.insert(3, "--disable-dev-shm-usage")
 
         return args
 
@@ -209,6 +250,9 @@ class DedicatedBrowserLauncher:
             f"           Ext    : {self.extension_dir}\n",
             file=sys.stderr,
         )
+
+        if self.start_broker:
+            await self._launch_broker()
 
         self._chrome_proc = await asyncio.create_subprocess_exec(
             *chrome_args,
@@ -229,17 +273,31 @@ class DedicatedBrowserLauncher:
         except asyncio.TimeoutError:
             pass
 
+        async def _drain_chrome_stderr(proc: asyncio.subprocess.Process) -> None:
+            if proc.stderr:
+                while True:
+                    line = await proc.stderr.readline()
+                    if not line:
+                        break
+                    text = line.decode("utf-8", errors="replace").rstrip()
+                    if "[native_host]" in text or "broker" in text.lower() or "exception" in text.lower():
+                        print(f"[host stderr] {text}", file=sys.stderr)
+
+        asyncio.create_task(_drain_chrome_stderr(self._chrome_proc))
+
         print(
             f"[launcher] Chrome launched (PID {self._chrome_proc.pid}). "
             "Navigating to notebook.google.com...",
             file=sys.stderr,
         )
 
+        # In Chrome v137+, --load-extension CLI flag is ignored; ensure unpacked extension via CDP
+        ext_id = await _cdp_load_unpacked_extension(self.cdp_port, self.extension_dir)
+        if ext_id:
+            print(f"[launcher] Companion extension confirmed via CDP (ID: {ext_id}).", file=sys.stderr)
+
         if not self.skip_auth_check:
             await self._ensure_authenticated()
-
-        if self.start_broker:
-            await self._launch_broker()
 
         print(
             "\n[launcher] Browser companion is ready. "
@@ -323,6 +381,18 @@ class DedicatedBrowserLauncher:
             f"[launcher] Broker daemon running (PID {self._broker_proc.pid}).",
             file=sys.stderr,
         )
+
+        async def _drain_stderr(proc: asyncio.subprocess.Process) -> None:
+            if proc.stderr:
+                while True:
+                    line = await proc.stderr.readline()
+                    if not line:
+                        break
+                    text = line.decode("utf-8", errors="replace").rstrip()
+                    if text:
+                        print(f"[broker] {text}", file=sys.stderr)
+
+        asyncio.create_task(_drain_stderr(self._broker_proc))
 
     async def _shutdown(self) -> None:
         """Gracefully terminates broker and Chrome sub-processes."""
