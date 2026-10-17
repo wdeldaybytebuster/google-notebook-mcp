@@ -23,15 +23,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m pip install -e ".[dev]"
 
       - name: Run Ruff Linter
         run: |
-          ruff check .
+          python -m ruff check .
 
       - name: Run Strict Mypy
         run: |
-          mypy --strict src/
+          python -m mypy --strict src/
 
   test-matrix:
     name: Test (${{ matrix.os }} - Py ${{ matrix.python-version }})
@@ -55,8 +55,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m pip install -e ".[dev]"
 
       - name: Run Pytest
         run: |
-          pytest tests/ -v
+          python -m pytest tests/ -v

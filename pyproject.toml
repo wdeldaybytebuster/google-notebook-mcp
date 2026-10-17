@@ -47,6 +47,14 @@ gemini-notebook-mcp = "mcp_gateway.cli:main"
 gemini-notebook-mcp-launcher = "mcp_gateway.launcher:main"
 gemini-notebook-mcp-allowlist = "mcp_gateway.allowlist_wizard:main"
 
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.9.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.9.0",
