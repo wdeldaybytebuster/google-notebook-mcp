@@ -1,5 +1,7 @@
 // scripts/wait_for_extension_and_run.js
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 
 async function checkExtension() {
   const listRes = await fetch("http://127.0.0.1:9222/json/list");
@@ -65,10 +67,28 @@ async function main() {
     process.exit(1);
   }
 
+  // Validate Chrome Extension ID format (strictly 32 lowercase chars between a and p)
+  if (!/^[a-p]{32}$/.test(ext.id)) {
+    console.error(`[WATCHER] Invalid extension ID format: "${ext.id}". Expected 32-char [a-p] string.`);
+    process.exit(1);
+  }
+
   // Register native messaging host with the exact extension ID
   console.log(`[WATCHER] Registering Native Messaging Host for ID: ${ext.id}...`);
-  execSync(`.venv/bin/python -m mcp_gateway.cli install --extension-id ${ext.id} --browser-config-dir "$HOME/.config/google-chrome-beta"`, { stdio: "inherit" });
-  execSync(`.venv/bin/python -m mcp_gateway.cli install --extension-id ${ext.id} --browser-config-dir "$HOME/.config/google-chrome-beta-mcp"`, { stdio: "inherit" });
+  const pythonBin = ".venv/bin/python";
+  const chromeBetaDir = path.join(os.homedir(), ".config", "google-chrome-beta");
+  const chromeBetaMcpDir = path.join(os.homedir(), ".config", "google-chrome-beta-mcp");
+
+  execFileSync(
+    pythonBin,
+    ["-m", "mcp_gateway.cli", "install", "--extension-id", ext.id, "--browser-config-dir", chromeBetaDir],
+    { stdio: "inherit" }
+  );
+  execFileSync(
+    pythonBin,
+    ["-m", "mcp_gateway.cli", "install", "--extension-id", ext.id, "--browser-config-dir", chromeBetaMcpDir],
+    { stdio: "inherit" }
+  );
 
   console.log("[WATCHER] Running 5-tool live qualification smoke test...");
   const notebookId = process.env.NOTEBOOK_ID || "00000000-0000-0000-0000-000000000001";

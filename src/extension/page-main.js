@@ -682,13 +682,14 @@ window.addEventListener('message', async (event) => {
   // Pre-flight Account Identity Guard on Mutations (P-03 / v4.2 Polish)
   const preflight = verifyAccountIdentityPreflight(command, payload);
   if (!preflight.ok) {
+    const targetOrigin = window.location.origin || 'https://notebook.google.com';
     window.postMessage(
       {
         source: 'page_main_result',
         requestId,
         result: preflight,
       },
-      '*'
+      targetOrigin
     );
     return;
   }
@@ -761,13 +762,14 @@ window.addEventListener('message', async (event) => {
 
   // Post result back. CRITICAL: result must never contain SNlM0e, cookie values,
   // ya29 tokens, or raw HTTP response headers.
+  const targetOrigin = window.location.origin || 'https://notebook.google.com';
   window.postMessage(
     {
       source: 'page_main_result',
       requestId,
       result,
     },
-    '*'
+    targetOrigin
   );
 });
 
@@ -777,6 +779,7 @@ window.addEventListener('message', async (event) => {
 
 (function sendReadySignal() {
   const auth = getAuthContext();
+  const targetOrigin = window.location.origin || 'https://notebook.google.com';
   // Only the authuser index (a number) is included — no tokens.
   window.postMessage(
     {
@@ -784,7 +787,7 @@ window.addEventListener('message', async (event) => {
       type: 'ready',
       authuser: auth.authuser,
     },
-    '*'
+    targetOrigin
   );
 
   // Expose helpers for testing and service worker interoperability

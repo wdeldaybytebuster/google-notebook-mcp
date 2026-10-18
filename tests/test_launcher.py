@@ -13,6 +13,7 @@ import pytest
 
 from mcp_gateway.launcher import (
     DedicatedBrowserLauncher,
+    NOTEBOOK_URL,
     _cdp_check_auth,
     find_chrome_binary,
 )
@@ -81,7 +82,7 @@ def test_build_chrome_args_contains_required_flags(
     assert "--load-extension=" in joined
     assert "--user-data-dir=" in joined
     assert "--remote-debugging-port=19222" in joined
-    assert "https://notebook.google.com/" in args
+    assert any(arg == NOTEBOOK_URL for arg in args)
 
 
 def test_build_chrome_args_raises_when_no_binary(
@@ -179,6 +180,66 @@ async def test_cdp_check_auth_returns_false_when_redirected_to_google_accounts()
         result = await _cdp_check_auth(cdp_port=49222, timeout_s=5.0)
 
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_cdp_check_auth_rejects_attacker_domain_spoofing() -> None:
+    """Returns False when page URL is on an attacker domain spoofing notebook domain."""
+    version_cm = MagicMock()
+    version_cm.__enter__ = MagicMock(
+        return_value=MagicMock(status=200, read=MagicMock(return_value=b"{}"))
+    )
+    version_cm.__exit__ = MagicMock(return_value=False)
+
+    pages = [{"url": "https://attacker.com/notebook.google.com"}]
+    list_cm = MagicMock()
+    list_cm.__enter__ = MagicMock(
+        return_value=MagicMock(
+            status=200,
+            read=MagicMock(return_value=json.dumps(pages).encode()),
+        )
+    )
+    list_cm.__exit__ = MagicMock(return_value=False)
+
+    def mock_urlopen(url: Any, timeout: Any = None) -> Any:
+        if "version" in str(url):
+            return version_cm
+        return list_cm
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        result = await _cdp_check_auth(cdp_port=59222, timeout_s=5.0)
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_cdp_check_auth_ignores_accounts_string_in_query_parameter() -> None:
+    """Returns True when notebook.google.com has accounts.google.com in query param."""
+    version_cm = MagicMock()
+    version_cm.__enter__ = MagicMock(
+        return_value=MagicMock(status=200, read=MagicMock(return_value=b"{}"))
+    )
+    version_cm.__exit__ = MagicMock(return_value=False)
+
+    pages = [{"url": "https://notebook.google.com/?redirect=https://accounts.google.com"}]
+    list_cm = MagicMock()
+    list_cm.__enter__ = MagicMock(
+        return_value=MagicMock(
+            status=200,
+            read=MagicMock(return_value=json.dumps(pages).encode()),
+        )
+    )
+    list_cm.__exit__ = MagicMock(return_value=False)
+
+    def mock_urlopen(url: Any, timeout: Any = None) -> Any:
+        if "version" in str(url):
+            return version_cm
+        return list_cm
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        result = await _cdp_check_auth(cdp_port=69222, timeout_s=5.0)
+
+    assert result is True
 
 
 # ---------------------------------------------------------------------------
