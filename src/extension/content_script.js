@@ -76,6 +76,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   // Forward command into MAIN world via window.postMessage.
+  const targetOrigin = window.location.origin || 'https://notebook.google.com';
   window.postMessage(
     {
       source: 'mcp_bridge_cmd',
@@ -83,7 +84,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       requestId: message.requestId,
       payload: message.payload,
     },
-    '*'
+    targetOrigin
   );
 
   sendResponse({ ok: true });

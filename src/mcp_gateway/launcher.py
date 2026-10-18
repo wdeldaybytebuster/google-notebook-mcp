@@ -23,6 +23,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -130,13 +131,20 @@ async def _cdp_check_auth(cdp_port: int, timeout_s: float) -> bool:
     # Filter out iframes (e.g. accounts.google.com/RotateCookiesPage embedded in notebook)
     top_pages = [p for p in pages if p.get("type") != "iframe"]
 
+    def _is_accounts_google(url_str: str) -> bool:
+        host = (urlsplit(url_str).hostname or "").lower()
+        return host == "accounts.google.com" or host.endswith(".accounts.google.com")
+
+    def _is_notebook_google(url_str: str) -> bool:
+        host = (urlsplit(url_str).hostname or "").lower()
+        return host in ("notebook.google.com", "notebooklm.google.com")
+
     # If any top-level tab is on accounts.google.com, Google sign-in is in progress
-    if any("accounts.google.com" in p.get("url", "") for p in top_pages):
+    if any(_is_accounts_google(p.get("url", "")) for p in top_pages):
         return False
 
     for page in top_pages:
-        url = page.get("url", "")
-        if "notebook.google.com" in url or "notebooklm.google.com" in url:
+        if _is_notebook_google(page.get("url", "")):
             return True
 
     return False
