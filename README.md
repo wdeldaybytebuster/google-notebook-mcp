@@ -10,7 +10,7 @@
 [![Security](https://img.shields.io/badge/Security-Zero--Credential--Export-success.svg)](docs/security.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**A secure, zero-credential-export Model Context Protocol (MCP) gateway connecting AI coding agents to your private [Google NotebookLM](https://notebooklm.google.com) knowledge bases.**
+**A secure, zero-credential-export Model Context Protocol (MCP) gateway connecting AI coding agents to your private [Google Notebook](https://notebook.google.com) knowledge bases (formerly NotebookLM).**
 
 [Quickstart](#quickstart) • [Wiki](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki) • [Supported Clients](#client-configuration) • [Tool Reference](#mcp-tool-reference) • [Documentation](docs/) • [Security Model](docs/security.md)
 
@@ -42,26 +42,26 @@ flowchart TD
         Broker["Broker Daemon (Unix Socket / Named Pipe)"]
         Journal["SQLite WAL Mutation Journal"]
         Allowlist["Allowlist Authorization (allowlist.json)"]
+        Scrubber["Zero-Leakage Secret Scrubber (secret_scrubber.py)"]
     end
 
     subgraph NativeBridge["Native Messaging Bridge"]
         NativeHost["Python Native Messaging Host (native_host.py)"]
-        Scrubber["Zero-Leakage Secret Scrubber (secret_scrubber.py)"]
     end
 
     subgraph BrowserLayer["Google Chrome (DBSC / TPM Containment)"]
         MV3["Companion Extension (MV3 Background Service Worker)"]
         ChromeNet["Chrome Native Network Stack (fetch credentials: 'include')"]
-        NotebookLM["Google NotebookLM (notebooklm.google.com)"]
+        NotebookLM["Google Notebook (notebook.google.com / notebooklm.google.com)"]
     end
 
     Client <-->|"JSON-RPC 2.0 (stdio)"| Facade
     Facade <-->|"Big-Endian Framed IPC"| Broker
     Broker <--> Journal
     Broker <--> Allowlist
+    Broker <--> Scrubber
     Broker <-->|"Local Socket"| NativeHost
-    NativeHost <--> Scrubber
-    Scrubber <-->|"Chrome stdio Framing (@I, <=512 KiB)"| MV3
+    NativeHost <-->|"Chrome stdio Framing (@I, <=512 KiB)"| MV3
     MV3 <-->|"Internal DOM fetch()"| ChromeNet
     ChromeNet <-->|"Authenticated TLS"| NotebookLM
 

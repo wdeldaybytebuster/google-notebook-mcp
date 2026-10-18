@@ -21,6 +21,8 @@ import struct
 import sys
 import time
 
+from typing import Any, cast
+
 IPC_FRAME_FORMAT = ">I"
 SOCKET_PATH = "/run/user/1000/notebooklm-mcp/broker.sock"
 TEST_NOTEBOOK_ID = "00000000-0000-0000-0000-000000000002"
@@ -28,7 +30,7 @@ TEST_NOTEBOOK_TITLE = "Test Notebook"
 PROD_NOTEBOOK_ID = "00000000-0000-0000-0000-000000000001"
 
 
-async def send_broker_command(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req: dict) -> dict:
+async def send_broker_command(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req: dict[str, Any]) -> dict[str, Any]:
     req_bytes = json.dumps(req).encode("utf-8")
     header = struct.pack(IPC_FRAME_FORMAT, len(req_bytes))
     writer.write(header + req_bytes)
@@ -37,11 +39,11 @@ async def send_broker_command(reader: asyncio.StreamReader, writer: asyncio.Stre
     header_bytes = await reader.readexactly(4)
     (msg_len,) = struct.unpack(IPC_FRAME_FORMAT, header_bytes)
     payload_bytes = await reader.readexactly(msg_len)
-    return json.loads(payload_bytes.decode("utf-8"))
+    return cast(dict[str, Any], json.loads(payload_bytes.decode("utf-8")))
 
 
-async def run_stage1_testing() -> dict:
-    results = {}
+async def run_stage1_testing() -> dict[str, Any]:
+    results: dict[str, Any] = {}
     print(f"[Stage 1] Connecting to broker at {SOCKET_PATH}...")
     reader, writer = await asyncio.open_unix_connection(SOCKET_PATH)
 

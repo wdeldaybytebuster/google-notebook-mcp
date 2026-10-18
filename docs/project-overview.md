@@ -45,7 +45,7 @@ The Google Gemini Notebook MCP Server is a high-performance, local-first Model C
 * **Scotty 3-Step Resumable Upload Pipeline**: Executes file source intent registration (`o4cbdc`), session initiation (`POST /upload/_/`), and byte streaming to `x-goog-upload-url` for local documents (PDF, DOCX, Markdown) in $\le 512\text{ KiB}$ slices under companion IPC mutex serialization (`_companion_ipc_mutex`, M-02).
 * **Scotty Resumability & Caching (P-02)**: Active upload session URLs are cached in `chrome.storage.session`. Interrupted uploads resume from server offset queried via `X-Goog-Upload-Command: query`.
 * **Asynchronous Readiness Polling Engine**: Polls `rLM1Ne` source status enums using Full Jitter Exponential Backoff (base delay 2.0s, max 30.0s, timeout 240s) to confirm indexing completion (`READY = 2`). Pre-query readiness verification is scoped exclusively to targeted sources (M-10).
-* **Upload Staging Service**: Grants single-use opaque `upload_id` tokens to prevent LLM agents from injecting arbitrary host filesystem paths.
+* **Direct Streaming File Ingestion**: Ingests document content via direct Base64 encoding or local documents through Scotty resumable upload streaming with offset recovery.
 
 ##### Note Operations & Schema Integrity
 * **First-Class Note Management**: Exposes `create_note` (via `CYK0Xb`), `list_notes` (extracting row `[0][17]` from `rLM1Ne`), and `delete_note` (via `tGMBJ`) tools under ADR-011 session lock.
@@ -65,7 +65,7 @@ The Google Gemini Notebook MCP Server is a high-performance, local-first Model C
 * Standard Model Context Protocol (MCP) clients: Claude Code, Cursor, Cline, Windsurf, Antigravity IDE.
 * 9 closed core tools: `select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `query_notebook`, `add_source`, `create_note`, `list_notes`, `delete_note`.
 * Chrome Manifest V3 companion extension paired via Chrome Native Messaging across Chrome, Chrome Beta, Chromium, Brave, and Edge.
-* Local SQLite mutation journal, allowlist policy engine, and OS keyring pairing token storage.
+* Local SQLite mutation journal and allowlist policy engine.
 * Operating systems: Linux (Debian/Ubuntu/Arch/ChromeOS Crostini), macOS (Darwin), Windows (via native named pipe).
 
 ##### Out of Scope

@@ -124,9 +124,6 @@ ADD_SOURCE_SCHEMA: dict[str, Any] = {
                 "mime_type": {
                     "type": "string",
                 },
-                "upload_id": {
-                    "type": "string",
-                },
             },
         },
     },
@@ -354,7 +351,6 @@ class SourceSpec(BaseModel):
     content: str | None = None
     doc_id: str | None = None
     mime_type: str | None = None
-    upload_id: str | None = None
 
 
 class AddSourceInput(BaseModel):

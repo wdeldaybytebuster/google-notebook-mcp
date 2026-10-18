@@ -7,7 +7,7 @@ This guide walks you through setting up and running the **Google Notebook MCP Ga
 ## Prerequisites
 
 1. **Python 3.11+** installed.
-2. **Google Chrome** (v112+ or Chrome Beta) with access to [Google NotebookLM](https://notebooklm.google.com).
+2. **Google Chrome** (v112+ or Chrome Beta) with access to [Google Notebook](https://notebook.google.com) (or legacy [NotebookLM](https://notebooklm.google.com)).
 3. **AI Coding Client**: Any client supporting Model Context Protocol (MCP) over stdio:
    - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview)
    - [Cursor](https://cursor.com/)

@@ -27,10 +27,9 @@ flowchart TD
         Logs["Client Transcripts & Logs"]
     end
 
-    Extension -- "Clean Payload Only (Zero Cookies)" --> Scrubber
-    Scrubber -- "Scrubbed IPC Frames" --> NativeHost
-    NativeHost --> Broker
-    Broker --> MCPFacade
+    Extension -- "Clean Payload Only (Zero Cookies)" --> NativeHost
+    NativeHost -- "Framed IPC (Zero 3rd-party deps)" --> Broker
+    Broker -- "Scrubbed via secret_scrubber.py" --> MCPFacade
     MCPFacade --> Client
     Client -.-> Logs
 
@@ -48,7 +47,7 @@ Standard web scrapers and unauthorized API bridges extract browser session cooki
 1. **In-Browser Execution**: All HTTP network requests to `notebook.google.com` are executed **inside Chrome's main network stack** using `fetch()` with credentials mode `include`.
 2. **Zero Cookie Extraction**: The Chrome companion extension never inspects, accesses, or serializes cookie jars. Cookies remain inside Chrome's native C++ network process.
 3. **Hardware Key Isolation**: DBSC authentication handshakes occur transparently inside Chrome, requiring no key export.
-4. **Mandatory Secret Scrubbing**: All IPC frames passing from the browser companion into the native messaging host must pass through `secret_scrubber.py`. Any accidental token patterns matching Google OAuth tokens, bearer authorization headers, or cookie strings are automatically replaced with `[REDACTED_SECRET]`.
+4. **Mandatory Secret Scrubbing**: All IPC and diagnostic frames passing through the broker daemon are filtered through `secret_scrubber.py`. Any accidental token patterns matching Google OAuth tokens, bearer authorization headers, or cookie strings are automatically replaced with `[REDACTED]`. The standalone `native_host.py` bridge remains dependency-free to ensure hermetic Chrome native messaging invocation.
 
 ---
 

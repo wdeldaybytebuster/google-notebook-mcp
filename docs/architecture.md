@@ -2,7 +2,7 @@
 
 **Document Version:** 4.2.0-STRICT  
 **System Status:** Closed-Loop Grounded, Verified & Production Hardened  
-**Primary Governance:** [`AGENTS.md`](../AGENTS.md) | [`docs/learnings-and-reasoning.md`](learnings-and-reasoning.md) | [`docs/progress-tracker.md`](progress-tracker.md)
+**Primary Governance:** [`AGENTS.md`](../AGENTS.md) | [`docs/archive/learnings-and-reasoning.md`](archive/learnings-and-reasoning.md) | [`docs/archive/progress-tracker.md`](archive/progress-tracker.md)
 
 ---
 
@@ -365,7 +365,7 @@ All tool errors across IPC and MCP stdio adhere to the closed failure contract:
 | **Browser Companion** | Chrome Manifest V3 Extension (`service_worker.js`) | Maintains native messaging port, provisions background tabs, and relays commands |
 | **In-Page Executor** | Injected JavaScript (`page-main.js`) in MAIN world | Extracts `SNlM0e`/`FdrFJe` and dispatches `fetch()` with native DBSC/cookie context |
 | **Mutation Journal** | SQLite 3 (`journal.db` via WAL mode) | Enforces deterministic HMAC-SHA256 request idempotency and transition tracking |
-| **Capability Keystore** | Python `keyring` (macOS Keychain, WinLocker, SecretService)| Stores local pairing tokens and capability grants (zero Google session cookies) |
+| **Local Configuration** | JSON (`allowlist.json`, `.notebook_mcp.json`) | Stores local allowlisted notebooks, multi-account routing, and project bindings |
 | **Upstream Services** | Google LabsTailwindUi (`batchexecute`, Scotty, gRPC-Web) | Private Google Gemini Notebook endpoints for metadata, uploads, notes, and streaming QA |
 
 ### 6.2 System Boundaries & Source Structure
@@ -383,8 +383,8 @@ All tool errors across IPC and MCP stdio adhere to the closed failure contract:
 
 * **Database (SQLite 3 - `~/.config/notebooklm-mcp-bridge/journal.db`)**: Stores the mutation journal (`request_key`, `notebook_id`, `operation_type`, `payload_hash`, `state`, `assigned_source_id`, timestamps) and the append-only `mutation_events` audit table. Enforces atomic transactions, SQLite WAL mode, and `busy_timeout=30000`.
 * **Local Allowlist Configuration (`~/.config/notebooklm-mcp-bridge/allowlist.json`)**: Stores user-approved notebook UUIDs, active provider mode, and multi-account email mappings. The allowlist starts empty; all access is opt-in.
-* **OS Keystore (Platform Vault via Python `keyring`)**: Stores only local pairing tokens and capability keys granting the MCP broker permission to communicate with the browser companion. Google cookies and master tokens are strictly forbidden from vault storage.
-* **Upload Staging Buffer (`/tmp/mcp-gemini-uploads/` or tmpfs RAM disk)**: Ephemeral, owner-only directory (`0o700`) holding local files approved by the user for upload. The server issues single-use opaque `upload_id` tokens, preventing arbitrary filesystem exfiltration.
+* **Project Configuration (`.notebook_mcp.json`)**: Optional workspace-local configuration storing the designated notebook ID and human-readable title for conversational project binding (ADR-017).
+* **Streaming Upload Ingestion**: Document upload ingestion processes Base64 payloads or streams local binary files via Google's Scotty resumable upload protocol in $\le 512\text{ KiB}$ IPC slices, caching active session URLs in `chrome.storage.session` for instant query offset recovery.
 
 ### 6.4 Auth and Access Model
 

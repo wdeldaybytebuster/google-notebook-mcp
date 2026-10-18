@@ -20,6 +20,13 @@ All schemas strictly enforce `additionalProperties: false` (JSON Schema) and `ex
 | `list_notes` | Read-only | `page_size`, `cursor` | Retrieves user notes with upstream schema anomaly canaries. |
 | `delete_note` | Write Mutation | `note_id`, `idempotency_key` | Deletes a user note by its unique identifier. |
 
+### MCP Tool Annotations
+
+Every tool declaration transmits standard Model Context Protocol (MCP) annotations via `list_tools`:
+- **Read-only tools** (`list_notebooks`, `get_notebook_metadata`, `list_sources`, `query_notebook`, `list_notes`): Transmit `readOnlyHint: true`, `destructiveHint: false`, and `idempotentHint: true`.
+- **Write / Mutating tools** (`add_source`, `create_note`, `delete_note`): Transmit `readOnlyHint: false` and `destructiveHint: true` (for `delete_note`) or `false`, alongside `idempotentHint` hints matching their idempotency key protections.
+- **Session management** (`select_notebook`): Transmits `readOnlyHint: false`, `destructiveHint: false`, and `idempotentHint: true`.
+
 ---
 
 ## 1. `select_notebook`

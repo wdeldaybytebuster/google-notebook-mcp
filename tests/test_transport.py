@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 import sys
 import pytest
@@ -79,6 +78,32 @@ async def test_unix_socket_server_roundtrip(tmp_path: Path) -> None:
     assert not sock_path.exists()
 
 
+@pytest.mark.asyncio
+async def test_unix_socket_server_singleton_lock(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("POSIX socket locking test")
+
+    sock_path = tmp_path / "singleton_test.sock"
+
+    async def dummy_cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        pass
+
+    server1 = UnixSocketServer(dummy_cb, path=str(sock_path))
+    await server1.start()
+    assert sock_path.exists()
+
+    # Second server attempting to bind on same socket must raise RuntimeError
+    server2 = UnixSocketServer(dummy_cb, path=str(sock_path))
+    with pytest.raises(RuntimeError, match="Another broker daemon is currently running"):
+        await server2.start()
+
+    # Stopping server1 releases lock and permits a new server to start
+    await server1.stop()
+    server3 = UnixSocketServer(dummy_cb, path=str(sock_path))
+    await server3.start()
+    await server3.stop()
+
+
 def test_get_windows_socket_path() -> None:
     from mcp_gateway.transport.paths import get_windows_socket_path
 
@@ -101,7 +126,7 @@ def test_get_windows_socket_path_length_guard() -> None:
 
 def test_journal_wal_busy_retry(tmp_path: Path) -> None:
     import sqlite3
-    from mcp_gateway.storage.journal import MutationJournal, MutationState, OperationType
+    from mcp_gateway.storage.journal import MutationJournal
 
     db_path = tmp_path / "journal.db"
     journal = MutationJournal(db_path)
