@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -85,4 +86,7 @@ def test_main_no_args_exits() -> None:
 def test_enforce_resource_limits_executes() -> None:
     # Must execute safely across platforms without raising
     enforce_resource_limits()
+    assert os.environ["UV_THREADPOOL_SIZE"] == "3"
+    assert "NODE_OPTIONS" in os.environ
+    assert os.environ["OPENBLAS_NUM_THREADS"] == "3"
 

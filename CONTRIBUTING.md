@@ -37,14 +37,14 @@ We enforce strict type safety, consistent code formatting, and robust automated 
 ### 1. Strict Type Checking
 All Python source code must pass strict `mypy`:
 ```bash
-uv run mypy --strict src/
+uv run mypy --strict src/ tests/ scripts/
 ```
 
 ### 2. Code Linting & Formatting
 We use `ruff` for fast linting and formatting:
 ```bash
-uv run ruff check .
-uv run ruff format --check .
+uv run ruff check src/
+uv run ruff format --check src/
 ```
 
 ### 3. Running Automated Tests

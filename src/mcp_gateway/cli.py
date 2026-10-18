@@ -20,9 +20,29 @@ os.environ["UV_THREADPOOL_SIZE"] = "3"
 
 
 def enforce_resource_limits() -> None:
-    """Configures threadpool and file descriptor limits on POSIX environments."""
+    """Configures threadpool, CPU affinity, memory defaults, and file descriptor limits."""
+    # Enforce hardware protection environment defaults
+    os.environ.setdefault("UV_THREADPOOL_SIZE", "3")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "3")
+    os.environ.setdefault("OMP_NUM_THREADS", "3")
+    os.environ.setdefault("MKL_NUM_THREADS", "3")
+    os.environ.setdefault(
+        "NODE_OPTIONS", "--max-old-space-size=1024 --max-semi-space-size=128"
+    )
+
     if sys.platform == "win32":
         return
+
+    # Restrict CPU affinity to cores 0-5 on Linux systems with > 6 cores
+    if hasattr(os, "sched_setaffinity") and hasattr(os, "sched_getaffinity"):
+        try:
+            available_cores = os.sched_getaffinity(0)
+            if len(available_cores) > 6:
+                target_cores = set(range(min(6, os.cpu_count() or 6)))
+                os.sched_setaffinity(0, target_cores)
+        except (OSError, ValueError, AttributeError):
+            pass
+
     try:
         import resource
 
@@ -36,6 +56,7 @@ def enforce_resource_limits() -> None:
 
 def run_mcp(socket_path: str | None = None) -> int:
     """Runs the MCP stdio facade."""
+    enforce_resource_limits()
     if sys.platform == "win32":
         import msvcrt
 

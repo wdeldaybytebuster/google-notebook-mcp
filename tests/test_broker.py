@@ -28,8 +28,11 @@ from mcp_gateway.schemas.error import (
 )
 from mcp_gateway.schemas.tools import (
     ADD_SOURCE_SCHEMA,
+    CREATE_NOTE_SCHEMA,
+    DELETE_NOTE_SCHEMA,
     GET_NOTEBOOK_METADATA_SCHEMA,
     LIST_NOTEBOOKS_SCHEMA,
+    LIST_NOTES_SCHEMA,
     LIST_SOURCES_SCHEMA,
     QUERY_NOTEBOOK_SCHEMA,
     SELECT_NOTEBOOK_SCHEMA,
@@ -134,7 +137,7 @@ def test_failure_envelope() -> None:
     assert d["error"]["retryable"] is False
 
 
-def test_five_tool_schemas_and_annotations() -> None:
+def test_nine_tool_schemas_and_annotations() -> None:
     schemas = [
         LIST_NOTEBOOKS_SCHEMA,
         SELECT_NOTEBOOK_SCHEMA,
@@ -142,15 +145,24 @@ def test_five_tool_schemas_and_annotations() -> None:
         LIST_SOURCES_SCHEMA,
         QUERY_NOTEBOOK_SCHEMA,
         ADD_SOURCE_SCHEMA,
+        CREATE_NOTE_SCHEMA,
+        LIST_NOTES_SCHEMA,
+        DELETE_NOTE_SCHEMA,
     ]
+    assert len(schemas) == 9
     for s in schemas:
         assert s["additionalProperties"] is False
         assert s["type"] == "object"
 
+    assert len(TOOL_ANNOTATIONS) == 9
     for tool_name, hints in TOOL_ANNOTATIONS.items():
         assert "readOnlyHint" in hints
         assert "destructiveHint" in hints
         assert "idempotentHint" in hints
+
+
+# Backward compatibility alias
+test_five_tool_schemas_and_annotations = test_nine_tool_schemas_and_annotations
 
 
 @pytest.mark.asyncio
@@ -223,6 +235,12 @@ async def test_mcp_facade_integration(broker: BrokerDaemon) -> None:
         "list_notes",
         "delete_note",
     ]
+    for t in list_res.tools:
+        assert t.annotations is not None
+        expected = TOOL_ANNOTATIONS[t.name]
+        assert t.annotations.read_only_hint == expected["readOnlyHint"]
+        assert t.annotations.destructive_hint == expected["destructiveHint"]
+        assert t.annotations.idempotent_hint == expected["idempotentHint"]
 
     call_entry = facade.server._request_handlers.get("tools/call")
     assert call_entry is not None
@@ -311,3 +329,21 @@ async def test_session_lock_isolation_and_parameter_overwrite(broker: BrokerDaem
     ])
     assert len(filtered) == 1
     assert filtered[0]["id"] == "nb-allowed-1"
+
+
+def test_account_identity_preflight_attaches_expected_email_and_accounts(broker: BrokerDaemon) -> None:
+    # broker fixture has accounts=["developer@gmail.com"]
+    payload: dict[str, Any] = {"rpcId": "CYK0Xb"}
+    out = broker._attach_identity_preflight(payload)
+    assert out["expectedAccounts"] == ["developer@gmail.com"]
+    assert out["expectedEmail"] == "developer@gmail.com"
+
+    # Command-level overrides take precedence
+    custom_cmd: dict[str, Any] = {
+        "expectedEmail": "custom@example.com",
+        "expectedAccounts": ["custom@example.com", "other@example.com"],
+    }
+    payload2: dict[str, Any] = {"rpcId": "tGMBJ"}
+    out2 = broker._attach_identity_preflight(payload2, custom_cmd)
+    assert out2["expectedEmail"] == "custom@example.com"
+    assert out2["expectedAccounts"] == ["custom@example.com", "other@example.com"]

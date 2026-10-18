@@ -36,21 +36,42 @@ class UnixSocketServer:
         path: str | None = None,
     ) -> None:
         self.path = Path(path or get_default_ipc_path())
+        self.lock_path = Path(str(self.path) + ".lock")
         self.client_connected_cb = client_connected_cb
         self._server: asyncio.Server | None = None
+        self._lock_file: Any = None
 
     async def start(self) -> None:
-        if self.path.exists():
-            try:
-                self.path.unlink()
-            except OSError:
-                pass
-
+        if self._server is not None:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.path.parent, 0o700)
         except OSError:
             pass
+
+        if sys.platform != "win32":
+            import fcntl
+
+            lock_file = open(self.lock_path, "a+")
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_file.seek(0)
+                lock_file.truncate()
+                lock_file.write(f"{os.getpid()}\n")
+                lock_file.flush()
+                self._lock_file = lock_file
+            except (BlockingIOError, OSError):
+                lock_file.close()
+                raise RuntimeError(
+                    f"Another broker daemon is currently running and holding the lock on {self.path}."
+                )
+
+        if self.path.exists():
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
 
         self._server = await asyncio.start_unix_server(
             self.client_connected_cb,
@@ -73,6 +94,24 @@ class UnixSocketServer:
                 self.path.unlink()
             except OSError:
                 pass
+
+        if self._lock_file is not None:
+            try:
+                import fcntl
+
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                self._lock_file.close()
+            except OSError:
+                pass
+            self._lock_file = None
+            if self.lock_path.exists():
+                try:
+                    self.lock_path.unlink()
+                except OSError:
+                    pass
 
     async def close(self) -> None:
         await self.stop()

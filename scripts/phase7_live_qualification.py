@@ -20,14 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 import struct
-import sys
 import time
-import urllib.request
-import websockets
-
-from mcp_gateway.launcher import DedicatedBrowserLauncher
+from typing import Any, cast
 
 IPC_FRAME_FORMAT = ">I"
 SOCKET_PATH = "/run/user/1000/notebooklm-mcp/broker.sock"
@@ -36,7 +31,7 @@ TARGET_NOTEBOOK_ID = "00000000-0000-0000-0000-000000000001"
 TARGET_NOTEBOOK_TITLE = "Google Notebook MCP"
 
 
-async def send_broker_command(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req: dict) -> dict:
+async def send_broker_command(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, req: dict[str, Any]) -> dict[str, Any]:
     req_bytes = json.dumps(req).encode("utf-8")
     header = struct.pack(IPC_FRAME_FORMAT, len(req_bytes))
     writer.write(header + req_bytes)
@@ -45,11 +40,11 @@ async def send_broker_command(reader: asyncio.StreamReader, writer: asyncio.Stre
     header_bytes = await reader.readexactly(4)
     (msg_len,) = struct.unpack(IPC_FRAME_FORMAT, header_bytes)
     payload_bytes = await reader.readexactly(msg_len)
-    return json.loads(payload_bytes.decode("utf-8"))
+    return cast(dict[str, Any], json.loads(payload_bytes.decode("utf-8")))
 
 
-async def run_live_qualification() -> dict:
-    results = {}
+async def run_live_qualification() -> dict[str, Any]:
+    results: dict[str, Any] = {}
     print(f"[phase7] Connecting to broker socket at {SOCKET_PATH}...")
     reader, writer = await asyncio.open_unix_connection(SOCKET_PATH)
 
@@ -131,7 +126,7 @@ async def run_live_qualification() -> dict:
 
         # Step 6: query_notebook
         print("\n--- Step 6: query_notebook ---")
-        query_req = {
+        query_req: dict[str, Any] = {
             "action": "query_notebook",
             "notebook_id": TARGET_NOTEBOOK_ID,
             "question": "What is the primary architectural purpose of the Google Notebooks MCP gateway?",

@@ -1,8 +1,8 @@
-"""Broker daemon and 5-tool MCP stdio facade for Gemini Notebook bridge.
+"""Broker daemon and 9-tool MCP stdio facade for Gemini Notebook bridge.
 
 Enforces:
 - Mandatory allowlist checks before notebook inspection or mutation.
-- Closed 5-tool JSON schema surface (additionalProperties: false).
+- Closed 9-tool JSON schema surface (additionalProperties: false).
 - Zero-leak credential redaction on all log and IPC outputs.
 - Conservative mutation journaling for state tracking and idempotency.
 - Strict stdio separation: protocol JSON-RPC on stdout, diagnostics on stderr.
@@ -84,6 +84,7 @@ from mcp_gateway.schemas.tools import (
     LIST_SOURCES_SCHEMA,
     QUERY_NOTEBOOK_SCHEMA,
     SELECT_NOTEBOOK_SCHEMA,
+    TOOL_ANNOTATIONS,
     validate_tool_args,
 )
 from mcp_gateway.storage.journal import (
@@ -192,13 +193,28 @@ class BrokerDaemon:
     def reload_allowlist(self) -> None:
         self._load_allowlist_safe()
 
+    def _attach_identity_preflight(
+        self, payload: dict[str, Any], command: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Attaches expectedAccounts and expectedEmail to outbound companion payloads for identity pre-flight verification."""
+        if self.allowlist and self.allowlist.accounts:
+            payload.setdefault("expectedAccounts", list(self.allowlist.accounts))
+            if len(self.allowlist.accounts) == 1:
+                payload.setdefault("expectedEmail", self.allowlist.accounts[0])
+        if command:
+            if "expectedEmail" in command:
+                payload["expectedEmail"] = command["expectedEmail"]
+            if "expectedAccounts" in command:
+                payload["expectedAccounts"] = command["expectedAccounts"]
+        return payload
+
     async def start(self) -> None:
         """Starts the platform-native IPC server and begins background heartbeat monitoring."""
-        self._ipc_server = await create_ipc_server(
-            self.handle_ipc_connection,
-            self.config.socket_path,
-        )
-        await self._ipc_server.start()
+        if self._ipc_server is None:
+            self._ipc_server = await create_ipc_server(
+                self.handle_ipc_connection,
+                self.config.socket_path,
+            )
         self._heartbeat_running = True
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         print(f"[broker] Listening on IPC endpoint: {self.config.socket_path}", file=sys.stderr)
@@ -467,6 +483,7 @@ class BrokerDaemon:
                     "isLastChunk": (idx == total_chunks - 1),
                     "chunkData": chunk_b64,
                 }
+                self._attach_identity_preflight(msg)
                 res = await self.send_to_companion("scotty_chunk", msg, timeout_seconds=120.0)
                 if not res.get("ok"):
                     return res
@@ -1114,7 +1131,9 @@ class BrokerDaemon:
                 content=str(source.get("content", "")),
                 notebook_id=nb_id,
             )
-            res = await self.send_to_companion("batchexecute", {"rpcId": "CYK0Xb", "paramsJson": payload, "notebookId": nb_id})
+            rpc_msg = {"rpcId": "CYK0Xb", "paramsJson": payload, "notebookId": nb_id}
+            self._attach_identity_preflight(rpc_msg, command)
+            res = await self.send_to_companion("batchexecute", rpc_msg)
             if res.get("ok"):
                 body = str(res.get("body", ""))
                 decoder = BatchexecuteStreamDecoder()
@@ -1131,10 +1150,14 @@ class BrokerDaemon:
                             pass
             # Fallback to izAoDd if CYK0Xb returned no source id (e.g. in mock companion)
             if not assigned_source_id:
-                res = await self.send_to_companion("batchexecute", {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id})
+                rpc_fallback = {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id}
+                self._attach_identity_preflight(rpc_fallback, command)
+                res = await self.send_to_companion("batchexecute", rpc_fallback)
         elif source_type in ("url", "youtube"):
             payload = make_add_url_payload(url=str(source["url"]), notebook_id=nb_id)
-            res = await self.send_to_companion("batchexecute", {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id})
+            rpc_msg = {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id}
+            self._attach_identity_preflight(rpc_msg, command)
+            res = await self.send_to_companion("batchexecute", rpc_msg)
         elif source_type == "drive":
             payload = make_add_drive_payload(
                 doc_id=str(source["doc_id"]),
@@ -1142,7 +1165,9 @@ class BrokerDaemon:
                 title=str(source.get("title", "")),
                 notebook_id=nb_id,
             )
-            res = await self.send_to_companion("batchexecute", {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id})
+            rpc_msg = {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id}
+            self._attach_identity_preflight(rpc_msg, command)
+            res = await self.send_to_companion("batchexecute", rpc_msg)
         elif source_type == "file":
             raw_content = str(source.get("content", ""))
             try:
@@ -1163,7 +1188,9 @@ class BrokerDaemon:
                 filename=str(source.get("title", "uploaded_file")),
                 notebook_id=nb_id,
             )
-            res = await self.send_to_companion("batchexecute", {"rpcId": "o4cbdc", "paramsJson": payload, "notebookId": nb_id})
+            rpc_msg = {"rpcId": "o4cbdc", "paramsJson": payload, "notebookId": nb_id}
+            self._attach_identity_preflight(rpc_msg, command)
+            res = await self.send_to_companion("batchexecute", rpc_msg)
         else:
             self.journal.transition(idempotency_key, MutationState.REJECTED)
             return make_error(INVALID_ARGUMENT, f"Unsupported source type {source_type!r}.").to_dict()
@@ -1219,6 +1246,7 @@ class BrokerDaemon:
                     "notebookId": nb_id,
                     "fileBase64": base64.b64encode(file_bytes).decode("ascii"),
                 }
+                self._attach_identity_preflight(upload_payload, command)
                 upload_res = await self.send_to_companion_exclusive("scotty_upload", upload_payload)
 
             if not upload_res.get("ok"):
@@ -1313,10 +1341,9 @@ class BrokerDaemon:
         self.journal.transition(idempotency_key, MutationState.SENT)
 
         payload = make_create_note_payload(title=title, content=content, notebook_id=nb_id)
-        res = await self.send_to_companion(
-            "batchexecute",
-            {"rpcId": "CYK0Xb", "paramsJson": payload, "notebookId": nb_id},
-        )
+        rpc_msg = {"rpcId": "CYK0Xb", "paramsJson": payload, "notebookId": nb_id}
+        self._attach_identity_preflight(rpc_msg, command)
+        res = await self.send_to_companion("batchexecute", rpc_msg)
 
         if not res.get("ok"):
             err_code = str(res.get("error", {}).get("code", ""))
@@ -1504,10 +1531,9 @@ class BrokerDaemon:
         self.journal.transition(idempotency_key, MutationState.SENT)
 
         payload = make_delete_note_payload(note_id=note_id, notebook_id=nb_id)
-        res = await self.send_to_companion(
-            "batchexecute",
-            {"rpcId": "tGMBJ", "paramsJson": payload, "notebookId": nb_id},
-        )
+        rpc_msg = {"rpcId": "tGMBJ", "paramsJson": payload, "notebookId": nb_id}
+        self._attach_identity_preflight(rpc_msg, command)
+        res = await self.send_to_companion("batchexecute", rpc_msg)
 
         if not res.get("ok"):
             err_code = str(res.get("error", {}).get("code", ""))
@@ -1527,7 +1553,7 @@ class BrokerDaemon:
 
 
 class McpFacade:
-    """Stdio MCP 2.0 facade exposing exactly the 5 consolidated tools."""
+    """Stdio MCP 2.0 facade exposing exactly the 9 consolidated tools."""
 
     def __init__(self, broker: BrokerDaemon | None = None) -> None:
         self.broker = broker or BrokerDaemon()
@@ -1535,6 +1561,14 @@ class McpFacade:
         self._register_handlers()
 
     def _register_handlers(self) -> None:
+        def _get_annotations(tool_name: str) -> types.ToolAnnotations:
+            hints = TOOL_ANNOTATIONS[tool_name]
+            return types.ToolAnnotations(
+                read_only_hint=hints["readOnlyHint"],
+                destructive_hint=hints["destructiveHint"],
+                idempotent_hint=hints["idempotentHint"],
+            )
+
         async def list_tools_handler(
             ctx: Any,
             req: types.ListToolsRequest,
@@ -1548,6 +1582,7 @@ class McpFacade:
                         "the user, and ask the user to confirm which notebook to use for this chat/project."
                     ),
                     input_schema=LIST_NOTEBOOKS_SCHEMA,
+                    annotations=_get_annotations("list_notebooks"),
                 ),
                 types.Tool(
                     name="select_notebook",
@@ -1557,41 +1592,49 @@ class McpFacade:
                         "by default to remember this selection in .notebook_mcp.json for future chats in this project."
                     ),
                     input_schema=SELECT_NOTEBOOK_SCHEMA,
+                    annotations=_get_annotations("select_notebook"),
                 ),
                 types.Tool(
                     name="get_notebook_metadata",
                     description="Retrieve metadata for an allowlisted notebook.",
                     input_schema=GET_NOTEBOOK_METADATA_SCHEMA,
+                    annotations=_get_annotations("get_notebook_metadata"),
                 ),
                 types.Tool(
                     name="list_sources",
                     description="List all sources within an allowlisted notebook.",
                     input_schema=LIST_SOURCES_SCHEMA,
+                    annotations=_get_annotations("list_sources"),
                 ),
                 types.Tool(
                     name="query_notebook",
                     description="Submit a grounded question to an allowlisted notebook.",
                     input_schema=QUERY_NOTEBOOK_SCHEMA,
+                    annotations=_get_annotations("query_notebook"),
                 ),
                 types.Tool(
                     name="add_source",
                     description="Add a new text, URL, YouTube, Drive, or file source to a notebook.",
                     input_schema=ADD_SOURCE_SCHEMA,
+                    annotations=_get_annotations("add_source"),
                 ),
                 types.Tool(
                     name="create_note",
                     description="Create a new note in an allowlisted Google Notebook.",
                     input_schema=CREATE_NOTE_SCHEMA,
+                    annotations=_get_annotations("create_note"),
                 ),
                 types.Tool(
                     name="list_notes",
                     description="List all notes within an allowlisted Google Notebook.",
                     input_schema=LIST_NOTES_SCHEMA,
+                    annotations=_get_annotations("list_notes"),
                 ),
                 types.Tool(
                     name="delete_note",
                     description="Delete a note from an allowlisted Google Notebook.",
                     input_schema=DELETE_NOTE_SCHEMA,
+                    annotations=_get_annotations("delete_note"),
                 ),
             ]
             return types.ListToolsResult(tools=tools)

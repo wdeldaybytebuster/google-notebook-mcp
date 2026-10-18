@@ -20,7 +20,9 @@ _src_root = str(Path(__file__).resolve().parent.parent / "src")
 if _src_root not in sys.path:
     sys.path.insert(0, _src_root)
 
-from mcp_gateway.transport import get_default_ipc_path
+from typing import Any, cast  # noqa: E402
+
+from mcp_gateway.transport import get_default_ipc_path  # noqa: E402
 
 IPC_FRAME_FORMAT = ">I"
 SOCKET_PATH = os.environ.get("MCP_BROKER_SOCKET", get_default_ipc_path())
@@ -70,8 +72,8 @@ DOCUMENTS_TO_PUSH = [
 async def send_broker_command(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
-    req: dict,
-) -> dict:
+    req: dict[str, Any],
+) -> dict[str, Any]:
     req_bytes = json.dumps(req).encode("utf-8")
     header = struct.pack(IPC_FRAME_FORMAT, len(req_bytes))
     writer.write(header + req_bytes)
@@ -80,7 +82,7 @@ async def send_broker_command(
     header_bytes = await reader.readexactly(4)
     (msg_len,) = struct.unpack(IPC_FRAME_FORMAT, header_bytes)
     payload_bytes = await reader.readexactly(msg_len)
-    return json.loads(payload_bytes.decode("utf-8"))
+    return cast(dict[str, Any], json.loads(payload_bytes.decode("utf-8")))
 
 
 async def main() -> None:
@@ -90,7 +92,7 @@ async def main() -> None:
     try:
         # Step 1: Ensure session is locked to production notebook
         print(f"[sync] Selecting notebook by title '{TARGET_NOTEBOOK_TITLE}'...")
-        sel_req: dict = {
+        sel_req: dict[str, Any] = {
             "action": "select_notebook",
             "title": TARGET_NOTEBOOK_TITLE,
             "save_for_project": True,
@@ -172,7 +174,6 @@ async def main() -> None:
 
         # Step 4: Create a dedicated executive Note summarizing the GitHub Launch
         print("\n[sync] Creating executive summary Note in notebook...")
-        report_file = base_dir / "docs/github-launch-completion-report.md"
         report_summary = (
             "# Google Notebook MCP — Public GitHub Launch & Release Certification\n\n"
             "- **Repository:** https://github.com/wdeldaybytebuster/google-notebook-mcp\n"

@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, cast
 
 
 async def run_live_test(notebook_id: str) -> None:
@@ -33,7 +33,7 @@ async def run_live_test(notebook_id: str) -> None:
         if not line:
             stderr_out = await proc.stderr.read() if proc.stderr else b""
             raise RuntimeError(f"Server closed connection unexpectedly. Stderr: {stderr_out.decode('utf-8', errors='replace')}")
-        return json.loads(line.decode("utf-8").strip())
+        return cast(dict[str, Any], json.loads(line.decode("utf-8").strip()))
 
     # 1. Initialize
     print("\n--- [STEP 1] initialize ---")

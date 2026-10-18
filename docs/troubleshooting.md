@@ -84,6 +84,6 @@ This guide addresses common setup hurdles, platform quirks, and error recovery p
 - Ensure your AI client (e.g. Cursor, Claude Code) is running as the same local OS user as the broker daemon.
 - To purge a stale socket from an unclean shutdown:
   ```bash
-  rm -f /tmp/notebooklm-mcp-broker.sock
+  rm -f /tmp/notebooklm-mcp-broker.sock /tmp/notebooklm-mcp-broker.sock.lock
   gemini-notebook-mcp serve
   ```
