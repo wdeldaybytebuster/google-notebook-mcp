@@ -78,6 +78,17 @@ def test_main_allowlist_seed_dispatch() -> None:
         )
 
 
+def test_main_onboard_dispatch() -> None:
+    with patch("mcp_gateway.cli.run_onboard", return_value=0) as mock_onboard:
+        ret = main(["onboard", "--browser", "google-chrome-beta", "--non-interactive"])
+        assert ret == 0
+        mock_onboard.assert_called_once_with(
+            project_dir=None,
+            browser="google-chrome-beta",
+            non_interactive=True,
+        )
+
+
 def test_main_no_args_exits() -> None:
     with pytest.raises(SystemExit):
         main([])

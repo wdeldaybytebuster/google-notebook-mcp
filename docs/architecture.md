@@ -349,6 +349,11 @@ All tool errors across IPC and MCP stdio adhere to the closed failure contract:
 * **Decision:** Implement project working directory persistence via `.notebook_mcp.json` (`notebook_id`, `title`, `updated_at`). Expose `save_for_project: bool = True` on `select_notebook`. In `list_notebooks` and `SESSION_UNLOCKED` error envelopes, emit structured `project_config` and actionable `user_prompt` directing the AI assistant to explicitly double-check with the user at the start of each chat session before locking the session.
 * **Status:** Accepted & Production Hardened.
 
+### ADR-018: Zero-Friction Autonomous Onboarding Orchestrator & Standalone RFC 6455 CDP Engine
+* **Context:** First-time onboarding historically required multiple manual, error-prone steps: inspecting browser flags, locating extension directories, manually registering Chrome Native Messaging Host JSON manifests across differing OS paths, finding extension IDs, and hand-crafting allowlists. Chrome 137+ also silently ignores `--load-extension` CLI flags in certain configurations.
+* **Decision:** Implement a zero-dependency, 6-stage autonomous onboarding orchestrator (`install_and_onboard.py` / `gemini-notebook-mcp onboard`) using Python standard library modules (`socket`, `struct`, `hashlib`). The engine implements a pure RFC 6455 WebSocket client with continuation frame reassembly and masked Pong replies to speak Chrome DevTools Protocol (`Extensions.loadUnpacked`) directly. It detects compatible Chromium browsers (rejecting ChromeOS Garcon bridges and applying Wayland flags), registers dual-scope native messaging manifests, unlinks stale sockets and Chrome `SingletonLock` deadlocks, polls `WIZ_global_data` login hydration, and interactively seeds `allowlist.json` and `.notebook_mcp.json`.
+* **Status:** Accepted & Production Hardened.
+
 ---
 
 ## 6. System Architecture & Component Specifications
@@ -376,6 +381,7 @@ All tool errors across IPC and MCP stdio adhere to the closed failure contract:
 * `src/mcp_gateway/storage/` — **Mutation Journal & State Persistence**: Owns the SQLite schema (`journal.py`, `schema.sql`), atomic state transitions (`prepared` -> `sent` -> `confirmed`/`rejected`/`unknown`), user version migrations (`PRAGMA user_version`), and HMAC-SHA256 request hashing.
 * `src/mcp_gateway/schemas/` — **Closed Contract & Wire Templates**: Defines the closed 9-tool JSON schemas (`tools.py`, `additionalProperties: false`, Pydantic v2 `extra="forbid"`) and standard failure envelopes (`error.py`).
 * `src/mcp_gateway/host/` — **Native Messaging Bridge & Installer**: Standalone native host (`native_host.py`) with C-level fd 2 redirection and cross-platform browser installer (`installer.py`).
+* `install_and_onboard.py` / `src/mcp_gateway/cli.py onboard` — **Autonomous Onboarding Orchestrator**: Zero-dependency 6-stage state machine automating browser discovery, dual-scope native messaging host manifest registration, CDP extension injection (RFC 6455 stdlib client), login hydration detection, and interactive allowlist/project binding.
 * `src/extension/` — **Manifest V3 Browser Companion**: Owns extension background service worker (`service_worker.js`), cold-start pinned tab provisioning, MAIN-world script injection (`page-main.js`), in-browser fetch execution, and 512 KiB frame chunking.
 * `tests/` — **Verification & Golden Fixtures**: Unit regression, mock E2E integration, security canaries, coordinate edge cases, and protocol healing test suites.
 
@@ -400,6 +406,65 @@ All tool errors across IPC and MCP stdio adhere to the closed failure contract:
 4. **Conservative Mutation Safety**: State transitions follow `prepared` -> `sent` -> `confirmed` / `rejected` / `unknown`. Once a mutation reaches `sent`, it must NEVER be automatically replayed on transport timeout; the broker must reconcile state via `rLM1Ne` before surfacing an error.
 5. **Coordinate Translation Integrity**: All citation coordinates received from Google's V8 engine must be translated from UTF-16 code units to native Python Unicode offsets before text slicing, ensuring perfect character alignment on astral-plane characters.
 6. **Defensive Resource Ceilings**: The runtime must enforce `taskset -c 0-5`, `UV_THREADPOOL_SIZE=3`, `ulimit -n 65536`, `NODE_OPTIONS="--max-old-space-size=1024"`, and strict loopback socket binding (`127.0.0.1`) to ensure stability on resource-constrained development nodes.
+
+### 6.6 Zero-Friction Onboarding & Orchestration Lifecycle
+
+The onboarding orchestrator (`install_and_onboard.py` and `gemini-notebook-mcp onboard`) coordinates the entire gateway bootstrap via an autonomous 6-stage state machine:
+
+```
+[ Stage 1: Browser Selection & Garcon Guard ]
+                     │
+                     ▼
+[ Stage 2: Dual-Scope Native Host Registration ]
+                     │
+                     ▼
+[ Stage 3: Broker Daemon & Browser Launch ]
+                     │
+                     ▼
+[ Stage 4: Zero-Touch Extension Injection (CDP) ]
+                     │
+                     ▼
+[ Stage 5: Sign-In Detection & Hydration Poll ]
+                     │
+                     ▼
+[ Stage 6: Discovery (wXbhsf) & Allowlist Seed ]
+```
+
+#### 1. Stage 1 — OS Default Browser Detection & 6-Browser Registry Selector
+* Detects the host default browser via `xdg-settings get default-web-browser` / `$BROWSER` on Linux, `LSHandlers` on macOS, or `HKCU\...\UrlAssociations\https\UserChoice` on Windows.
+* Validates against the 6 verified Chromium variants: `google-chrome-beta`, `google-chrome`, `chromium`, `brave`, `edge`, and `edge-beta`.
+* **Crostini Garcon Guard:** Explicitly detects and rejects `garcon-url-handler` (the ChromeOS bridging daemon that delegates URLs to the host ChromeOS browser outside the Crostini container namespace, where container IPC sockets and unpacked directories are inaccessible). Interactively prompts to select a native Linux Chromium binary if default is incompatible or Garcon.
+
+#### 2. Stage 2 — Dual-Scope Native Messaging Host Registration
+* Calculates deterministic 32-character extension IDs from `manifest.json`.
+* Registers `com.mcp.gemini.broker.json` in both scopes:
+  - System/User global directory (e.g. `~/.config/google-chrome-beta/NativeMessagingHosts/`)
+  - Isolated runtime profile directory (`~/.config/notebooklm-mcp-bridge/chrome-profile/NativeMessagingHosts/`)
+* Bakes resolved socket path (`MCP_BROKER_SOCKET`, `NOTEBOOKLM_MCP_SOCKET`) and edge resource caps (`UV_THREADPOOL_SIZE=3`, `OMP_NUM_THREADS=3`) directly into the generated `native_host_launcher.py` (or `.cmd` on Windows), guaranteeing process independence when Chrome spawns the host without inheriting terminal shell environments.
+
+#### 3. Stage 3 — Policy Broker Daemon & Isolated Browser Launch
+* Probes the canonical broker socket (`get_default_ipc_path()`). If `connect()` fails with `ConnectionRefusedError`, automatically unlinks the stale socket file before spawning `mcp_gateway.cli serve`.
+* Cleans up stale Chrome `SingletonLock`, `SingletonSocket`, and `SingletonCookie` symlinks in `chrome-profile` if no active browser process holds the directory.
+* Spawns the chosen browser with `--remote-debugging-port=9222`, `--load-extension`, `--user-data-dir`, and ChromeOS Sommelier Wayland guards (`--no-sandbox --no-zygote --disable-dev-shm-usage`).
+
+#### 4. Stage 4 — Zero-Touch Extension Injection (CDP RFC 6455)
+* Speaks Chrome DevTools Protocol directly over `ws://127.0.0.1:9222/devtools/browser/...` using a custom, zero-dependency RFC 6455 WebSocket client built on Python standard library modules (`socket`, `struct`, `hashlib`).
+* Reassembles fragmented WebSocket frames (`FIN == 0` with opcode `0x1`, followed by opcode `0x0` continuation frames until `FIN == 1`).
+* Responds to server `Ping` (`0x9`) frames with properly masked `Pong` (`0x8A`) frames echoing ping payloads per RFC 6455 §5.5.3.
+* Calls `Extensions.loadUnpacked` to load `src/extension/` programmatically, bypassing Chrome 137+ enterprise/security blocks on CLI extension flags.
+* Polls `/json` for active targets; if the live extension ID drifts from candidate IDs, dynamically rewires `allowed_origins` in `com.mcp.gemini.broker.json` and reloads the extension.
+
+#### 5. Stage 5 — Sign-In Detection & WIZ_global_data Hydration Poll
+* Inspects open tabs via `http://127.0.0.1:9222/json/list`. If any tab is on `accounts.google.com` (`/signin`, `/ServiceLogin`, `/v3/signin`, `/CheckCookie`), pauses and instructs the user in the terminal.
+* Once the user is on `notebook.google.com`, executes in-page `Runtime.evaluate` asserting:
+  `Boolean(window.WIZ_global_data && window.WIZ_global_data.SNlM0e) && Boolean(window.WIZ_global_data.oM1Kwf || window.WIZ_global_data.FdrFJe)`
+* Provides multi-tick grace periods for lazy profile hydration, verifying login readiness with zero credential export.
+
+#### 6. Stage 6 — Live Notebook Discovery (wXbhsf) & Interactive Allowlist Seeding
+* Probes the live broker IPC socket for `{"action": "list_notebooks"}`.
+* If the companion extension is still performing its initial native messaging handshake, falls back to an in-tab `wXbhsf` query (`batchexecute`) evaluated inside `notebook.google.com`.
+* Uses Google's verified `[null, 1, null, [2]]` view enum (with `source-path=/` and `hl=en`), parsing `wrb.fr` records inside the browser and transmitting only compact `[{id, title}]` arrays over CDP to avoid buffering multi-megabyte raw responses.
+* Displays a numbered table of notebooks, interactively prompts for authorization (`1,3`, `all`, or custom UUID), binds active account email (`oM1Kwf`), writes `allowlist.json` atomically with `0o600` permissions, and automatically persists `.notebook_mcp.json` with the project's default notebook.
 
 ---
 

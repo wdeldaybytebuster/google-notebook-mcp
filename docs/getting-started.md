@@ -7,7 +7,7 @@ This guide walks you through setting up and running the **Google Notebook MCP Ga
 ## Prerequisites
 
 1. **Python 3.11+** installed.
-2. **Google Chrome** (v112+ or Chrome Beta) with access to [Google Notebook](https://notebook.google.com) (or legacy [NotebookLM](https://notebooklm.google.com)).
+2. **Google Chrome** (v112+ or Chrome Beta) with access to [Google Notebook](https://notebook.google.com) (formerly [NotebookLM](https://notebooklm.google.com)).
 3. **AI Coding Client**: Any client supporting Model Context Protocol (MCP) over stdio:
    - [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview)
    - [Cursor](https://cursor.com/)
@@ -17,14 +17,38 @@ This guide walks you through setting up and running the **Google Notebook MCP Ga
 
 ---
 
-## 3-Minute Quickstart
+## 🚀 1-Step Quickstart: Zero-Friction Onboarding (Recommended)
 
-### Step 1: Clone and Install
+The gateway provides an autonomous 6-stage onboarding orchestrator ([`install_and_onboard.py`](../install_and_onboard.py)) built strictly with Python 3.11+ standard library modules. It automates browser selection, manifest registration, broker startup, extension injection, login verification, and allowlist seeding in a single command:
 
 ```bash
 git clone https://github.com/wdeldaybytebuster/google-notebook-mcp.git
 cd google-notebook-mcp
 
+# Run the autonomous onboarding wizard:
+python3 install_and_onboard.py
+
+# Or via the CLI if already installed in your environment:
+gemini-notebook-mcp onboard
+```
+
+### What the Onboarding Script Automates
+1. **Stage 1 (Browser Selection)**: Detects your OS default browser against a 6-browser registry (`google-chrome-beta`, `google-chrome`, `chromium`, `brave`, `edge`, `edge-beta`). Automatically detects and rejects ChromeOS `garcon-url-handler` bridges, and auto-injects Wayland/Sommelier flags (`--no-sandbox --no-zygote --disable-dev-shm-usage`) on Crostini. Persists `CHROME_PATH` to `.env`.
+2. **Stage 2 (Manifest Registration)**: Computes candidate extension IDs and registers `com.mcp.gemini.broker.json` in global browser config directories and isolated profile directories (including Windows Registry). Bakes the resolved socket path and resource caps (`UV_THREADPOOL_SIZE=3`) into the launcher wrapper.
+3. **Stage 3 (Broker & Browser Launch)**: Cleans stale sockets and `SingletonLock` symlinks, starts the Policy Broker daemon (`mcp_gateway.cli serve`), and launches Chrome with CDP remote debugging (`port 9222`).
+4. **Stage 4 (Extension Injection)**: Injects the companion extension via CDP `Extensions.loadUnpacked` (using a zero-dependency RFC 6455 WebSocket client). If Chrome 137+ blocks CLI flags, opens `chrome://extensions` with guided instructions, automatically detects the active Extension ID, updates manifests, and forces service worker re-connection.
+5. **Stage 5 (Google Sign-In Hydration)**: Monitors open tabs, detects sign-in progress, and polls `window.WIZ_global_data.SNlM0e` (CSRF) and `oM1Kwf` (account email) in the page's MAIN world to verify login without ever reading cookies.
+6. **Stage 6 (Discovery & Allowlist Seeding)**: Queries all visible notebooks using Google's live `wXbhsf` wire payload, presents a numbered selection table, atomically persists `allowlist.json` with `0o600` permissions and multi-account isolation, and binds `.notebook_mcp.json` in the project root.
+
+---
+
+## Manual Step-by-Step Setup (Alternative)
+
+If you prefer to configure each component manually:
+
+### Step 1: Install Dependencies
+
+```bash
 # Using pip:
 pip install -e .
 
@@ -34,13 +58,12 @@ uv sync
 
 ### Step 2: Register Native Messaging Host
 
-Register the native messaging bridge with your Chrome browser so Chrome and the MCP gateway can communicate:
+Register the native messaging bridge with your Chrome browser:
 
 ```bash
-# Automated cross-platform registration:
 gemini-notebook-mcp install
 ```
-*(On Linux and macOS, this writes the manifest into Chrome's default `NativeMessagingHosts` directory. On Windows, it registers the required registry key under `HKCU\Software\Google\Chrome\NativeMessagingHosts`)*.
+*(On Linux and macOS, this writes the manifest into Chrome's `NativeMessagingHosts` directory. On Windows, it registers the required registry key under `HKCU\Software\Google\Chrome\NativeMessagingHosts`)*.
 
 ### Step 3: Load the Companion Extension in Chrome
 
@@ -52,13 +75,11 @@ gemini-notebook-mcp install
 
 ### Step 4: Launch the Gateway
 
-Start the background broker and Chrome companion:
+Start the background broker and dedicated Chrome companion:
 
 ```bash
 gemini-notebook-mcp launch
 ```
-
-This launches a dedicated, isolated browser session with the companion extension loaded and starts the local IPC broker daemon.
 
 ### Step 5: Authorize Your Notebooks
 
@@ -68,8 +89,6 @@ Run the interactive allowlist wizard to pick which notebooks your AI agents can 
 gemini-notebook-mcp allowlist seed
 ```
 
-This presents a numbered list of all your NotebookLM notebooks. Enter the numbers you wish to allowlist for MCP access.
-
 ---
 
 ## Next Steps
@@ -77,5 +96,5 @@ This presents a numbered list of all your NotebookLM notebooks. Enter the number
 - Configure your AI editor by following the [Client Configuration Guide](client-configuration.md).
 - Review all available tools in the [MCP Tools Reference](tools-reference.md).
 - Read the [Security Architecture](security.md) to understand how your session tokens remain secure.
-- Browse the [Online GitHub Wiki](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki) for additional guides and interactive walkthroughs.
+- Browse the [Online GitHub Wiki](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki) or local [`wiki/`](../wiki/) for additional guides and interactive walkthroughs.
 - Inspect the [GitHub Launch Completion Report](github-launch-completion-report.md) for full audit records and verification ledgers.

@@ -179,6 +179,37 @@ def run_allowlist_seed(
     return asyncio.run(run_seed_wizard(socket_path=_socket, allowlist_path=allowlist_path))
 
 
+def run_onboard(
+    project_dir: Path | None = None,
+    browser: str | None = None,
+    non_interactive: bool = False,
+) -> int:
+    """Runs the unified zero-friction onboarding orchestrator."""
+    import importlib.util
+
+    root = (project_dir or Path.cwd()).resolve()
+    script = root / "install_and_onboard.py"
+    if not script.exists():
+        candidate = Path(__file__).resolve().parent.parent.parent / "install_and_onboard.py"
+        if candidate.exists():
+            script = candidate
+
+    if script.exists():
+        spec = importlib.util.spec_from_file_location("install_and_onboard", script)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return int(
+                mod.run_onboarding(
+                    project_root=root,
+                    preferred_browser=browser,
+                    non_interactive=non_interactive,
+                )
+            )
+    print(f"[!] Error: Could not locate install_and_onboard.py in {root}", file=sys.stderr)
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gemini-notebook-mcp",
@@ -312,6 +343,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to allowlist.json (default: ~/.config/notebooklm-mcp-bridge/allowlist.json)",
     )
 
+    # Subcommand: onboard
+    onboard_parser = subparsers.add_parser(
+        "onboard",
+        help="Run the zero-friction cross-platform onboarding orchestrator",
+    )
+    onboard_parser.add_argument(
+        "--project-dir",
+        type=Path,
+        default=None,
+        help="Path to project repository root (default: current directory)",
+    )
+    onboard_parser.add_argument(
+        "--browser",
+        type=str,
+        default=None,
+        help="Explicitly select a supported browser key (e.g. google-chrome-beta)",
+    )
+    onboard_parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        default=False,
+        help="Run without interactive terminal prompts",
+    )
+
     return parser
 
 
@@ -356,9 +411,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         parser.print_help(sys.stderr)
         return 1
+    elif args.subcommand == "onboard":
+        return run_onboard(
+            project_dir=args.project_dir,
+            browser=args.browser,
+            non_interactive=args.non_interactive,
+        )
     else:
         parser.print_help(sys.stderr)
         return 1
+
+
+def main_onboard() -> None:
+    """CLI script entrypoint for gemini-notebook-mcp-onboard."""
+    sys.exit(main(["onboard", *sys.argv[1:]]))
 
 
 if __name__ == "__main__":
