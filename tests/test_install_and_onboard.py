@@ -11,6 +11,7 @@ import socket
 import struct
 import sys
 import threading
+import urllib.parse
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -317,7 +318,7 @@ def test_wait_for_notebook_login_resilient(monkeypatch: pytest.MonkeyPatch) -> N
 
     info = onboard.wait_for_notebook_login(timeout_seconds=5)
     assert info["email"] == "user@example.com"
-    assert "notebook.google.com" in info["url"]
+    assert urllib.parse.urlparse(info["url"]).hostname == "notebook.google.com"
 
 
 # ---------------------------------------------------------------------------

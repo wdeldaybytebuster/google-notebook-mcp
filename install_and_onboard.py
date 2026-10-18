@@ -945,8 +945,8 @@ def discover_notebooks_via_cdp_fallback() -> list[dict[str, str]]:
     notebook_pages = [
         p
         for p in pages
-        if "notebook.google.com" in str(p.get("url", ""))
-        or "notebooklm.google.com" in str(p.get("url", ""))
+        if urllib.parse.urlparse(str(p.get("url", ""))).hostname
+        in ("notebook.google.com", "notebooklm.google.com")
     ]
     if not notebook_pages or not notebook_pages[0].get("webSocketDebuggerUrl"):
         return []
