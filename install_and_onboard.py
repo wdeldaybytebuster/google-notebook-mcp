@@ -458,14 +458,19 @@ def detect_os_default_browser() -> str | None:
             if res.returncode == 0 and res.stdout:
                 return res.stdout.lower()
         elif sys_name == "Windows":
-            import winreg  # type: ignore[import-not-found]
-
-            key_path = (
-                r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"
-            )
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:  # type: ignore[attr-defined]
-                prog_id, _ = winreg.QueryValueEx(key, "ProgId")  # type: ignore[attr-defined]
-                return str(prog_id)
+            try:
+                winreg = sys.modules.get("winreg") or __import__("winreg")
+                key_path = (
+                    r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"
+                )
+                open_key = getattr(winreg, "OpenKey")
+                hkey_cu = getattr(winreg, "HKEY_CURRENT_USER")
+                query_val = getattr(winreg, "QueryValueEx")
+                with open_key(hkey_cu, key_path) as key:
+                    prog_id, _ = query_val(key, "ProgId")
+                    return str(prog_id)
+            except Exception:
+                pass
     except Exception:
         pass
     return None
@@ -664,13 +669,17 @@ def write_native_host_manifests(
     if sys_name == "Windows" and written_paths:
         manifest_win_path = str(written_paths[0].resolve())
         try:
-            import winreg  # type: ignore[import-not-found]
+            winreg = sys.modules.get("winreg") or __import__("winreg")
+            create_key = getattr(winreg, "CreateKey")
+            set_value = getattr(winreg, "SetValueEx")
+            hkey_cu = getattr(winreg, "HKEY_CURRENT_USER")
+            reg_sz = getattr(winreg, "REG_SZ")
 
             for spec in SUPPORTED_BROWSERS:
                 reg_sub = rf"{spec.windows_reg_key}\{NATIVE_HOST_NAME}"
                 try:
-                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_sub) as key:  # type: ignore[attr-defined]
-                        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, manifest_win_path)  # type: ignore[attr-defined]
+                    with create_key(hkey_cu, reg_sub) as key:
+                        set_value(key, "", 0, reg_sz, manifest_win_path)
                 except Exception:
                     pass
         except Exception:
