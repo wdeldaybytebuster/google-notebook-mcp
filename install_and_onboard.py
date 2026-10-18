@@ -819,7 +819,7 @@ def wait_for_notebook_login(timeout_seconds: int = 300) -> dict[str, str]:
     while time.time() - start < timeout_seconds:
         pages = [p for p in (cdp_get_json("/json/list") or []) if p.get("type") == "page"]
         is_signin = any(
-            "accounts.google.com" in str(p.get("url", ""))
+            urllib.parse.urlparse(str(p.get("url", ""))).hostname == "accounts.google.com"
             and any(
                 k in str(p.get("url", ""))
                 for k in ("/signin", "/ServiceLogin", "/v3/signin", "/CheckCookie")
@@ -829,11 +829,8 @@ def wait_for_notebook_login(timeout_seconds: int = 300) -> dict[str, str]:
         notebook_pages = [
             p
             for p in pages
-            if (
-                "notebook.google.com" in str(p.get("url", ""))
-                or "notebooklm.google.com" in str(p.get("url", ""))
-            )
-            and "accounts.google.com" not in str(p.get("url", ""))
+            if urllib.parse.urlparse(str(p.get("url", ""))).hostname
+            in ("notebook.google.com", "notebooklm.google.com")
         ]
 
         if not is_signin and notebook_pages:
