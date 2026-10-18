@@ -11,9 +11,9 @@ The Google Notebook MCP operates on a 5-tier zero-raw-cookie bridge:
 [Client (AI Agent)] 
        │ (stdio JSON-RPC)
 [Tier 2: MCP Facade (`cli.py mcp`)]
-       │ (Unix socket: /tmp/notebooklm-mcp-broker.sock, >I)
+       │ (Local IPC: $XDG_RUNTIME_DIR/broker.sock or Windows Named Pipe, >I)
 [Tier 2: Broker Daemon (`cli.py serve`)]
-       │ (Unix socket: /tmp/notebooklm-mcp-broker.sock, >I)
+       │ (Local IPC: $XDG_RUNTIME_DIR/broker.sock or Windows Named Pipe, >I)
 [Tier 3: Native Messaging Host (`native_host.py`)]
        │ (Chrome stdio framing: @I, chunked 512 KiB)
 [Tier 4: Browser Companion Extension (MV3)]
@@ -21,7 +21,15 @@ The Google Notebook MCP operates on a 5-tier zero-raw-cookie bridge:
 [Tier 5: Google NotebookLM (notebook.google.com)]
 ```
 
-### Pre-requisites Checklist
+### Automated 1-Step Setup (Recommended)
+Run the automated onboarding orchestrator to complete all extension, manifest, broker, and allowlist setup in one pass:
+```bash
+python3 install_and_onboard.py
+# or: gemini-notebook-mcp onboard
+```
+
+### Manual Pre-requisites Checklist
+If configuring manually:
 1. **Chrome Extension Loaded**: Unpacked extension in `src/extension/` loaded into Google Chrome (`chrome://extensions` with Developer Mode enabled). Note your Extension ID (e.g. `abcdefghijklmnop...`).
 2. **Native Messaging Host Registered**:
    ```bash

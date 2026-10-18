@@ -84,7 +84,34 @@ flowchart TD
 
 ## Quickstart
 
-### 1. Install
+### 🚀 Zero-Friction Automated Onboarding (Recommended)
+
+Run the autonomous onboarding orchestrator directly from the repository root:
+
+```bash
+git clone https://github.com/wdeldaybytebuster/google-notebook-mcp.git
+cd google-notebook-mcp
+
+# Run the 6-stage autonomous onboarding wizard
+python3 install_and_onboard.py
+
+# Or via the CLI if installed:
+gemini-notebook-mcp onboard
+```
+
+The orchestrator automatically:
+1. Detects your compatible Chromium browser (bypassing ChromeOS Garcon bridges and configuring Wayland flags).
+2. Registers the Chrome Native Messaging Host manifests across global and profile scopes.
+3. Starts the background Policy Broker daemon.
+4. Injects the companion extension via CDP (with guided fallback for Chrome 137+).
+5. Detects your Google Sign-In state on `notebook.google.com`.
+6. Discovers all your notebooks and interactively seeds `allowlist.json` and `.notebook_mcp.json`.
+
+---
+
+### Manual Step-by-Step Setup
+
+#### 1. Install
 
 ```bash
 git clone https://github.com/wdeldaybytebuster/google-notebook-mcp.git
@@ -97,7 +124,7 @@ pip install -e .
 uv sync
 ```
 
-### 2. Register Chrome Native Messaging Host
+#### 2. Register Chrome Native Messaging Host
 
 Automatically registers the gateway bridge with Chrome:
 
@@ -105,7 +132,7 @@ Automatically registers the gateway bridge with Chrome:
 gemini-notebook-mcp install
 ```
 
-### 3. Load Companion Extension in Chrome
+#### 3. Load Companion Extension in Chrome
 
 1. Open Chrome and navigate to `chrome://extensions`.
 2. Enable **Developer mode** (toggle in the top-right).
@@ -115,13 +142,13 @@ gemini-notebook-mcp install
    gemini-notebook-mcp install --extension-id <COPIED_EXTENSION_ID>
    ```
 
-### 4. Launch Gateway & Dedicated Browser
+#### 4. Launch Gateway & Dedicated Browser
 
 ```bash
 gemini-notebook-mcp launch
 ```
 
-### 5. Authorize Your Notebooks
+#### 5. Authorize Your Notebooks
 
 Run the interactive allowlist wizard to choose which notebooks your AI agents can access:
 

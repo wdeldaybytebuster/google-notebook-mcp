@@ -45,6 +45,7 @@ Issues = "https://github.com/wdeldaybytebuster/google-notebook-mcp/issues"
 gemini-notebook-mcp = "mcp_gateway.cli:main"
 gemini-notebook-mcp-launcher = "mcp_gateway.launcher:main"
 gemini-notebook-mcp-allowlist = "mcp_gateway.allowlist_wizard:main"
+gemini-notebook-mcp-onboard = "mcp_gateway.cli:main_onboard"
 
 [project.optional-dependencies]
 dev = [

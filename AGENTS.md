@@ -178,6 +178,7 @@ When `add_source` is invoked with `wait_until_ready=true`:
    - Scotty Resumability: Session caching and query offset resumption (delivered).
    - Error Deltas: Immediate `STREAM_SEVERED` signaling on mid-stream severance (delivered).
    - Project Binding & In-Chat Confirmation: Project-level `.notebook_mcp.json` persistence and conversational double-check handshake (delivered).
+   - Zero-Friction Onboarding Orchestrator: Autonomous 6-stage state machine (`install_and_onboard.py`, `gemini-notebook-mcp onboard`) with RFC 6455 stdlib WebSocket, Crostini/Wayland guards, and dual-scope manifest registration (delivered).
 3. **Future Extension Capabilities:**
    - Progress Notifications: Emit MCP `notifications/progress` during long-running Scotty byte uploads and readiness polling cycles.
    - UI Integration: Visual badges reflecting ADR-011 lock state in browser extension popup.
