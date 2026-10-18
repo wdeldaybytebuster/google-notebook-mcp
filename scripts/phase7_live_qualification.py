@@ -20,15 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 import struct
-import sys
 import time
-import urllib.request
-import websockets
 from typing import Any, cast
-
-from mcp_gateway.launcher import DedicatedBrowserLauncher
 
 IPC_FRAME_FORMAT = ">I"
 SOCKET_PATH = "/run/user/1000/notebooklm-mcp/broker.sock"

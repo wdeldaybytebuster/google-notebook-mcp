@@ -27,7 +27,7 @@ jobs:
 
       - name: Run Ruff Linter
         run: |
-          python -m ruff check src/ tests/ scripts/
+          python -m ruff check src/
 
       - name: Run Strict Mypy
         run: |

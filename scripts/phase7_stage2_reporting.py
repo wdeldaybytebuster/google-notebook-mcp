@@ -19,9 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 import struct
-import sys
 import time
 from typing import Any, cast
 

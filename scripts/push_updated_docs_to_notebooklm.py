@@ -20,9 +20,9 @@ _src_root = str(Path(__file__).resolve().parent.parent / "src")
 if _src_root not in sys.path:
     sys.path.insert(0, _src_root)
 
-from typing import Any, cast
+from typing import Any, cast  # noqa: E402
 
-from mcp_gateway.transport import get_default_ipc_path
+from mcp_gateway.transport import get_default_ipc_path  # noqa: E402
 
 IPC_FRAME_FORMAT = ">I"
 SOCKET_PATH = os.environ.get("MCP_BROKER_SOCKET", get_default_ipc_path())
@@ -174,7 +174,6 @@ async def main() -> None:
 
         # Step 4: Create a dedicated executive Note summarizing the GitHub Launch
         print("\n[sync] Creating executive summary Note in notebook...")
-        report_file = base_dir / "docs/github-launch-completion-report.md"
         report_summary = (
             "# Google Notebook MCP — Public GitHub Launch & Release Certification\n\n"
             "- **Repository:** https://github.com/wdeldaybytebuster/google-notebook-mcp\n"
