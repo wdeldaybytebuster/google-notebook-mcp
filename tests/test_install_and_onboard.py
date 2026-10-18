@@ -391,3 +391,118 @@ def test_interactive_allowlist_seeding_multiple_prompt(tmp_path: Path, monkeypat
     assert proj_conf.exists()
     pdata = json.loads(proj_conf.read_text(encoding="utf-8"))
     assert pdata["notebook_id"] == "nb-2"
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Extension-First Onboarding Helpers (Developer Mode, Clipboard, Navigation)
+# ---------------------------------------------------------------------------
+
+
+def test_preseed_chrome_developer_mode(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "chrome-profile"
+    onboard.preseed_chrome_developer_mode(profile_dir)
+
+    prefs_file = profile_dir / "Default" / "Preferences"
+    assert prefs_file.exists()
+    prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+    assert prefs["extensions"]["ui"]["developer_mode"] is True
+
+    # Test preserving existing preferences
+    prefs["other_setting"] = "preserved_value"
+    prefs_file.write_text(json.dumps(prefs), encoding="utf-8")
+
+    onboard.preseed_chrome_developer_mode(profile_dir)
+    reloaded = json.loads(prefs_file.read_text(encoding="utf-8"))
+    assert reloaded["extensions"]["ui"]["developer_mode"] is True
+    assert reloaded["other_setting"] == "preserved_value"
+
+
+def test_copy_to_clipboard_fallback() -> None:
+    # If no clipboard tool is installed, returns False cleanly without crashing
+    with patch("shutil.which", return_value=None), patch("platform.system", return_value="Linux"):
+        assert onboard.copy_to_clipboard("test-text") is False
+
+    # When clipboard tool is present and succeeds
+    with (
+        patch("shutil.which", return_value="/usr/bin/wl-copy"),
+        patch("platform.system", return_value="Linux"),
+        patch("subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(returncode=0)
+        assert onboard.copy_to_clipboard("test-text") is True
+
+
+def test_navigate_to_notebooklm_tab_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+    ws_calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def mock_cdp_get_json(endpoint: str, timeout: float = 2.5) -> Any:
+        if endpoint == "/json/list":
+            return [
+                {
+                    "type": "page",
+                    "url": "https://notebook.google.com/u/0/",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1:9222/page/notebook",
+                }
+            ]
+        return None
+
+    def mock_cdp_ws_call(ws_url: str, method: str, params: Any = None, **kwargs: Any) -> dict[str, Any]:
+        ws_calls.append((ws_url, method, params or {}))
+        return {"result": {}}
+
+    monkeypatch.setattr(onboard, "cdp_get_json", mock_cdp_get_json)
+    monkeypatch.setattr(onboard, "cdp_ws_call", mock_cdp_ws_call)
+
+    assert onboard.navigate_to_notebooklm("https://notebook.google.com/") is True
+    assert any(method == "Page.reload" for _, method, _ in ws_calls)
+
+
+def test_navigate_to_notebooklm_navigate_existing(monkeypatch: pytest.MonkeyPatch) -> None:
+    ws_calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def mock_cdp_get_json(endpoint: str, timeout: float = 2.5) -> Any:
+        if endpoint == "/json/list":
+            return [
+                {
+                    "type": "page",
+                    "url": "chrome://extensions",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1:9222/page/extensions",
+                }
+            ]
+        return None
+
+    def mock_cdp_ws_call(ws_url: str, method: str, params: Any = None, **kwargs: Any) -> dict[str, Any]:
+        ws_calls.append((ws_url, method, params or {}))
+        return {"result": {}}
+
+    monkeypatch.setattr(onboard, "cdp_get_json", mock_cdp_get_json)
+    monkeypatch.setattr(onboard, "cdp_ws_call", mock_cdp_ws_call)
+
+    assert onboard.navigate_to_notebooklm("https://notebook.google.com/") is True
+    assert any(
+        method == "Page.navigate" and params.get("url") == "https://notebook.google.com/"
+        for _, method, params in ws_calls
+    )
+
+
+def test_guide_manual_extension_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    polls = 0
+
+    def mock_cdp_get_json(endpoint: str, timeout: float = 2.5) -> Any:
+        nonlocal polls
+        polls += 1
+        if polls < 2:
+            return [{"type": "page", "url": "chrome://extensions"}]
+        return [
+            {
+                "type": "service_worker",
+                "url": "chrome-extension://abcdefghijklmnopabcdefghijklmnop/service_worker.js",
+            }
+        ]
+
+    monkeypatch.setattr(onboard, "cdp_get_json", mock_cdp_get_json)
+    monkeypatch.setattr(onboard, "copy_to_clipboard", lambda _: True)
+
+    ext_id = onboard.guide_manual_extension_load_if_needed(tmp_path)
+    assert ext_id == "abcdefghijklmnopabcdefghijklmnop"
+
