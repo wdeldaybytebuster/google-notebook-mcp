@@ -782,7 +782,7 @@ def copy_to_clipboard(text: str) -> bool:
             timeout=2.0,
             check=False,
         )
-        return proc.returncode == 0
+        return bool(proc.returncode == 0)
     except Exception:
         return False
 
@@ -928,7 +928,7 @@ def navigate_to_notebooklm(notebook_url: str = NOTEBOOK_URL) -> bool:
             f"http://{CDP_HOST}:{CDP_PORT}/json/new?{notebook_url}", method="PUT"
         )
         with urllib.request.urlopen(req, timeout=3.0) as resp:
-            return resp.status == 200
+            return bool(resp.status == 200)
     except Exception as exc:
         print(f"  [*] Note: Failed to navigate tab to {notebook_url} via CDP: {exc}")
         return False
