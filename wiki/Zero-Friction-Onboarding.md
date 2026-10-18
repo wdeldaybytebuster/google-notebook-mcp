@@ -60,46 +60,45 @@ Chrome Native Messaging requires a JSON manifest (`com.mcp.gemini.broker.json`) 
 1. **Stale Socket & Lock Unlinking:**
    - Probes the broker socket. If the socket exists but `connect()` raises `ConnectionRefusedError`, it unlinks the stale socket file before spawning the broker.
    - Cleans up stale Chrome `SingletonLock`, `SingletonSocket`, and `SingletonCookie` symlinks in `chrome-profile` to prevent crash-recovery deadlocks.
-2. **Resource Capping:**
+2. **Developer Mode Pre-Seeding:**
+   - Pre-seeds `chrome-profile/Default/Preferences` with `{"extensions": {"ui": {"developer_mode": true}}}` so Developer mode is already turned ON when the extensions management page opens.
+3. **Resource Capping:**
    Applies `UV_THREADPOOL_SIZE=3`, `OMP_NUM_THREADS=3`, `NODE_OPTIONS="--max-old-space-size=1024 --max-semi-space-size=128"`, and file descriptor limit 65536.
-3. **Crostini Sommelier Wayland Guards:**
+4. **Crostini Sommelier Wayland Guards:**
    If running under ChromeOS Wayland (`/usr/bin/sommelier`), passes `--no-sandbox --no-zygote --disable-dev-shm-usage` to prevent Wayland compositor crashes.
+5. **Initial Launch Target:**
+   Launches the browser directly at `chrome://extensions` (rather than the login page) so the companion extension is verified before authentication occurs.
 
 ---
 
-### Stage 4: Zero-Touch Extension Injection via RFC 6455 CDP
+### Stage 4: Extension Injection & Verification Gate
 
-Chrome 137+ enterprise and security policies frequently ignore the `--load-extension` command-line flag. The orchestrator bypasses this restriction by automating Chrome via the **Chrome DevTools Protocol (CDP)**.
+Chrome 137+ enterprise and security policies frequently ignore the `--load-extension` command-line flag. The orchestrator enforces an **Extension-First Verification Gate**:
 
 1. **Pure Standard-Library RFC 6455 WebSocket Client:**
    Implemented purely in `socket`, `struct`, and `hashlib` with zero third-party packages:
    - **Continuation Frame Reassembly:** Correctly buffers fragmented payloads (`FIN == 0` with opcode `0x1`, followed by opcode `0x0` continuation frames until `FIN == 1`).
    - **Masked Pong Replies:** Responds to server `Ping` (`0x9`) frames with client-masked `Pong` (`0x8A`) frames echoing ping payloads per RFC 6455 §5.5.3.
-2. **CDP `Extensions.loadUnpacked` Injection:**
-   Connects to `ws://127.0.0.1:9222/devtools/browser/...` and invokes:
-   ```json
-   {
-     "id": 1,
-     "method": "Extensions.loadUnpacked",
-     "params": { "path": "/path/to/src/extension" }
-   }
-   ```
-3. **Dynamic Extension ID Re-Handshake:**
-   If Chrome assigns an extension ID different from candidate hashes, the orchestrator updates `allowed_origins` in `com.mcp.gemini.broker.json` and immediately re-triggers `Extensions.loadUnpacked` so `service_worker.js` connects immediately.
+2. **CDP `Extensions.loadUnpacked` & 1-Click Guided Fallback:**
+   Attempts automated injection via CDP. If the browser restricts CDP extension loading, the orchestrator copies the absolute extension path to the system clipboard (`wl-copy`, `xclip`, `xsel`, `pbcopy`, `clip`) and prompts the user to click **Load unpacked** (1 click) and paste the path.
+3. **Dynamic Extension ID Sync:**
+   Detects `service_worker.js` registration in `/json`. If Chrome assigns an extension ID different from candidate hashes, updates `allowed_origins` in `com.mcp.gemini.broker.json` and immediately re-triggers `Extensions.loadUnpacked` so `service_worker.js` connects without delay.
 
 ---
 
-### Stage 5: Sign-In Detection & `WIZ_global_data` Hydration Poll
+### Stage 5: NotebookLM Navigation & `WIZ_global_data` Hydration Poll
 
-1. **Google Accounts Intercept:**
+1. **Automated Navigation:**
+   Only after Stage 4 confirms the companion extension's service worker is active, the orchestrator automatically navigates the browser tab to `https://notebook.google.com/` (reloading or navigating existing pages via CDP `Page.navigate`, or opening `/json/new`). Because the extension is already running, content scripts attach immediately upon page load.
+2. **Google Accounts Intercept:**
    Inspects open tabs via `http://127.0.0.1:9222/json/list`. If the user is on `accounts.google.com` (`/signin`, `/ServiceLogin`, `/v3/signin`), it pauses and alerts the user in the terminal to complete sign-in.
-2. **In-Page Hydration Assertion:**
+3. **In-Page Hydration Assertion:**
    Executes in-page `Runtime.evaluate` on `notebook.google.com`:
    ```javascript
    Boolean(window.WIZ_global_data && window.WIZ_global_data.SNlM0e) &&
    Boolean(window.WIZ_global_data.oM1Kwf || window.WIZ_global_data.FdrFJe)
    ```
-3. **Account Email Binding:**
+4. **Account Email Binding:**
    Extracts `window.WIZ_global_data.oM1Kwf` (active Google email) to enforce the Pre-Flight Account Identity Guard (P-03).
 
 ---

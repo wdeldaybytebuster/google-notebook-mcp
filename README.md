@@ -102,9 +102,9 @@ gemini-notebook-mcp onboard
 The orchestrator automatically:
 1. Detects your compatible Chromium browser (bypassing ChromeOS Garcon bridges and configuring Wayland flags).
 2. Registers the Chrome Native Messaging Host manifests across global and profile scopes.
-3. Starts the background Policy Broker daemon.
-4. Injects the companion extension via CDP (with guided fallback for Chrome 137+).
-5. Detects your Google Sign-In state on `notebook.google.com`.
+3. Pre-seeds Developer mode and launches Chrome directly at `chrome://extensions`.
+4. Injects or guides 1-click loading of the companion extension (with clipboard path assist) and verifies `service_worker.js`.
+5. Navigates automatically to `notebook.google.com` with the companion extension already active.
 6. Discovers all your notebooks and interactively seeds `allowlist.json` and `.notebook_mcp.json`.
 
 ---

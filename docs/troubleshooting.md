@@ -37,15 +37,21 @@ This guide addresses common setup hurdles, platform quirks, and error recovery p
 
 ---
 
-### 2. Chrome Extension ID Mismatch & Chrome 137+ Unpacked Blocks
+### 2. Chrome Extension ID Mismatch, Unpacked Flags & Linux/Kali Extension-First Flow
 
 **Symptoms:**
 - Native messaging calls fail with `Access denied`.
-- On Chrome 137+, command-line `--load-extension` flags are ignored.
+- On Linux (Kali, Debian, Ubuntu) or Chrome 137+, command-line `--load-extension` flags are ignored on clean profiles.
+- Installer hangs waiting for login because the companion extension was not loaded first.
 
 **Remedy:**
-- `install_and_onboard.py` automatically injects unpacked extensions via CDP `Extensions.loadUnpacked` over a local RFC 6455 WebSocket.
-- If the live Extension ID differs from candidate calculations, the script automatically updates `allowed_origins` in `com.mcp.gemini.broker.json` on-the-fly and forces service worker re-connection.
+- `install_and_onboard.py` employs an **Extension-First Gating Protocol**:
+  1. Pre-seeds Chrome's `Default/Preferences` with Developer mode turned ON.
+  2. Launches Chrome directly at `chrome://extensions`.
+  3. Copies the `src/extension/` absolute folder path to your system clipboard (`wl-copy`, `xclip`, `xsel`, `pbcopy`, or `clip`).
+  4. Prompts you to click **Load unpacked** (1 click) and press `Ctrl+V` to select the folder if CLI injection was restricted.
+  5. Automatically detects the active Extension ID, synchronizes `allowed_origins` in `com.mcp.gemini.broker.json`, and reconnects the service worker.
+  6. Automatically navigates the tab to `notebook.google.com` only after the companion extension is verified, ensuring content scripts attach properly.
 - For manual setups, open `chrome://extensions`, copy the 32-letter Extension ID, and run:
   ```bash
   gemini-notebook-mcp install --extension-id <COPIED_EXTENSION_ID>

@@ -717,6 +717,76 @@ def cleanup_stale_singleton_locks(profile_dir: Path) -> None:
                 pass
 
 
+def preseed_chrome_developer_mode(profile_dir: Path) -> None:
+    """Pre-seed Chrome Default/Preferences with developer_mode enabled.
+
+    Ensures that when chrome://extensions is opened, the 'Developer mode' toggle
+    is already turned ON, simplifying the manual load unpacked step to 1 click.
+    """
+    try:
+        default_dir = profile_dir / "Default"
+        default_dir.mkdir(parents=True, exist_ok=True)
+        prefs_file = default_dir / "Preferences"
+        prefs: dict[str, Any] = {}
+        if prefs_file.exists():
+            try:
+                raw = json.loads(prefs_file.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    prefs = raw
+            except Exception:
+                prefs = {}
+
+        extensions_dict = prefs.setdefault("extensions", {})
+        if not isinstance(extensions_dict, dict):
+            extensions_dict = {}
+            prefs["extensions"] = extensions_dict
+
+        ui_dict = extensions_dict.setdefault("ui", {})
+        if not isinstance(ui_dict, dict):
+            ui_dict = {}
+            extensions_dict["ui"] = ui_dict
+
+        ui_dict["developer_mode"] = True
+        prefs_file.write_text(json.dumps(prefs, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:
+        print(f"  [*] Note: Could not pre-seed developer mode in {profile_dir}: {exc}")
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Attempt to copy text to system clipboard using available CLI tools.
+
+    Supports Wayland (wl-copy), X11 (xclip, xsel), macOS (pbcopy), and Windows (clip).
+    Returns True if successfully copied, False otherwise.
+    """
+    sys_name = platform.system()
+    try:
+        if sys_name == "Darwin":
+            cmd = ["pbcopy"]
+        elif sys_name == "Windows":
+            cmd = ["clip"]
+        else:
+            if shutil.which("wl-copy"):
+                cmd = ["wl-copy"]
+            elif shutil.which("xclip"):
+                cmd = ["xclip", "-selection", "clipboard"]
+            elif shutil.which("xsel"):
+                cmd = ["xsel", "--clipboard", "--input"]
+            else:
+                return False
+
+        proc = subprocess.run(
+            cmd,
+            input=text.encode("utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def is_socket_live(socket_path: Path) -> bool:
     """Probe if socket_path is listening and responding to connections."""
     if platform.system() == "Windows":
@@ -741,12 +811,15 @@ def is_socket_live(socket_path: Path) -> bool:
 
 def ensure_extension_loaded_via_cdp(extension_dir: Path) -> str | None:
     """Confirm extension service worker is active or inject via CDP `Extensions.loadUnpacked`."""
-    targets = cdp_get_json("/json") or []
-    for t in targets:
-        url = str(t.get("url", ""))
-        if url.startswith("chrome-extension://") and "service_worker.js" in url:
-            ext_id = url.split("/")[2]
-            return ext_id
+    # Check if already registered or starting up
+    for _ in range(4):
+        targets = cdp_get_json("/json") or []
+        for t in targets:
+            url = str(t.get("url", ""))
+            if url.startswith("chrome-extension://") and "service_worker.js" in url:
+                ext_id = url.split("/")[2]
+                return ext_id
+        time.sleep(0.75)
 
     ver_info = cdp_get_json("/json/version")
     if isinstance(ver_info, dict) and ver_info.get("webSocketDebuggerUrl"):
@@ -785,26 +858,23 @@ def force_service_worker_reconnect(extension_dir: Path) -> None:
 
 
 def guide_manual_extension_load_if_needed(extension_dir: Path) -> str | None:
-    """Open `chrome://extensions` and guide the user if automated flags were blocked."""
-    print("\n=========================================================================")
-    print(" ACTION REQUIRED: Enable Companion Extension")
-    print("=========================================================================")
-    print(" Your browser blocked command-line unpacked extension injection.")
-    print(" Opening chrome://extensions for you now. Please complete these 3 clicks:")
-    print("   1. Toggle ON 'Developer mode' (top-right corner of chrome://extensions)")
-    print("   2. Click 'Load unpacked' (top-left button)")
-    print(f"   3. Select this folder: {extension_dir.resolve()}")
-    print("=========================================================================")
+    """Guide the user to load the companion extension if automated flags were blocked."""
+    ext_path = str(extension_dir.resolve())
+    copied = copy_to_clipboard(ext_path)
+    clipboard_msg = (
+        "      (Path copied to clipboard! Press Ctrl+V in the file picker to paste)"
+        if copied
+        else f"      Path: {ext_path}"
+    )
 
-    try:
-        urllib.request.urlopen(
-            urllib.request.Request(
-                f"http://{CDP_HOST}:{CDP_PORT}/json/new?chrome://extensions", method="PUT"
-            ),
-            timeout=3.0,
-        )
-    except Exception:
-        pass
+    print("\n=========================================================================")
+    print(" ACTION REQUIRED: Load Companion Extension (1 click)")
+    print("=========================================================================")
+    print(" The browser has opened to chrome://extensions with Developer mode enabled.")
+    print(" To load the companion extension:")
+    print("   1. Click 'Load unpacked' (top-left button).")
+    print(f"   2. Select this extension directory:\n{clipboard_msg}")
+    print("=========================================================================")
 
     print("[*] Waiting for extension service_worker.js to register...")
     for _ in range(90):
@@ -817,6 +887,51 @@ def guide_manual_extension_load_if_needed(extension_dir: Path) -> str | None:
                 return ext_id
         time.sleep(2.0)
     return None
+
+
+def navigate_to_notebooklm(notebook_url: str = NOTEBOOK_URL) -> bool:
+    """Navigate browser tab to NotebookLM URL.
+
+    Checks open pages in CDP /json/list:
+    1. If a notebook.google.com page already exists, reloads or activates it.
+    2. If a page exists (e.g. chrome://extensions), navigates it using CDP Page.navigate.
+    3. If no page exists or Page.navigate fails, opens a new tab via /json/new?{notebook_url}.
+    """
+    try:
+        pages = [p for p in (cdp_get_json("/json/list") or []) if p.get("type") == "page"]
+
+        # Check if already on notebook.google.com
+        for p in pages:
+            url_str = str(p.get("url", ""))
+            parsed = urllib.parse.urlparse(url_str)
+            if parsed.hostname in ("notebook.google.com", "notebooklm.google.com"):
+                ws_url = p.get("webSocketDebuggerUrl")
+                if isinstance(ws_url, str):
+                    try:
+                        cdp_ws_call(ws_url, "Page.reload", {}, timeout=3.0)
+                        return True
+                    except Exception:
+                        pass
+
+        # If an existing tab is open (e.g. chrome://extensions), navigate it
+        if pages:
+            first_ws = pages[0].get("webSocketDebuggerUrl")
+            if isinstance(first_ws, str):
+                try:
+                    cdp_ws_call(first_ws, "Page.navigate", {"url": notebook_url}, timeout=4.0)
+                    return True
+                except Exception:
+                    pass
+
+        # Fallback: create new tab via HTTP PUT /json/new
+        req = urllib.request.Request(
+            f"http://{CDP_HOST}:{CDP_PORT}/json/new?{notebook_url}", method="PUT"
+        )
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            return resp.status == 200
+    except Exception as exc:
+        print(f"  [*] Note: Failed to navigate tab to {notebook_url} via CDP: {exc}")
+        return False
 
 
 def wait_for_notebook_login(timeout_seconds: int = 300) -> dict[str, str]:
@@ -1283,6 +1398,9 @@ def run_onboarding(
     # Clean stale SingletonLocks in profile dir
     cleanup_stale_singleton_locks(PROFILE_DIR)
 
+    # Pre-seed Developer mode so chrome://extensions opens with Developer mode toggled ON
+    preseed_chrome_developer_mode(PROFILE_DIR)
+
     if cdp_get_json("/json/version") is None:
         print(f"[*] Launching {selected_spec.display_name} with isolated MCP profile...")
         chrome_cmd = [
@@ -1290,11 +1408,11 @@ def run_onboarding(
             f"--user-data-dir={PROFILE_DIR}",
             f"--remote-debugging-port={CDP_PORT}",
             "--enable-unsafe-extension-debugging",
-            f"--disable-extensions-except={extension_dir}",
-            f"--load-extension={extension_dir}",
+            f"--disable-extensions-except={extension_dir.resolve()}",
+            f"--load-extension={extension_dir.resolve()}",
             "--no-first-run",
             "--no-default-browser-check",
-            NOTEBOOK_URL,
+            "chrome://extensions",
         ]
 
         # Crostini / Sommelier / Container Wayland flags
@@ -1326,6 +1444,10 @@ def run_onboarding(
         )
         force_service_worker_reconnect(extension_dir)
         print(f"[+] Synchronized Native Messaging manifest with active Extension ID: {live_ext_id}")
+
+    # Explicit navigation to NotebookLM only after companion extension is active
+    print(f"\n[*] Companion extension verified. Navigating browser to {NOTEBOOK_URL}...")
+    navigate_to_notebooklm(NOTEBOOK_URL)
 
     # Stage 5: Sign-in hydration poll
     auth_info = wait_for_notebook_login(timeout_seconds=300)

@@ -640,3 +640,48 @@ Accept: application/json+protobuf
 0x00 0x00 0x00 0x2A { "action": "ping", "timestamp": 1728800000 }
 ```
 `native_host.py` bridges the two framing conventions with zero memory copying.
+
+---
+
+## 8. Zero-Friction Onboarding State Machine & Extension-First Gating Protocol
+
+To eliminate manual configuration errors while strictly respecting zero-credential export and hardware resource caps, the repository provides [`install_and_onboard.py`](../install_and_onboard.py) (callable via `gemini-notebook-mcp onboard`). It implements an autonomous 6-stage state machine:
+
+```
+[ Stage 1: Browser Selection & Garcon Guard ]
+                     │
+                     ▼
+[ Stage 2: Dual-Scope Native Host Registration ]
+                     │
+                     ▼
+[ Stage 3: Broker Daemon & Chrome Launch ]
+   • Pre-seed PROFILE_DIR/Default/Preferences with developer_mode: true
+   • Launch Chrome with initial target: chrome://extensions
+                     │
+                     ▼
+[ Stage 4: Extension Setup & Verification Gate (BLOCKING) ]
+   • Probe /json for service_worker.js
+   • If missing, display 1-click terminal guide with clipboard assist
+   • Detect active Extension ID & synchronize allowed_origins
+   • Trigger force_service_worker_reconnect
+                     │
+                     ▼
+[ Stage 5: Navigate to NotebookLM & Sign-In Hydration Poll ]
+   • Only after extension is verified, navigate tab to notebook.google.com
+   • Companion content scripts attach automatically on page load
+   • Poll WIZ_global_data in MAIN world for CSRF and active account email
+                     │
+                     ▼
+[ Stage 6: Discovery (wXbhsf) & Allowlist / Project Binding ]
+```
+
+### 8.1 The Extension-First Gating Invariant
+On standard Chromium builds (particularly under Debian, Kali, Ubuntu, and Chrome 137+), command-line `--load-extension` flags are often ignored on clean profiles without an explicit user developer mode policy. If the browser opened `notebook.google.com` first, the user would complete sign-in while the script hung indefinitely because content scripts were not injected into the page.
+
+The Extension-First protocol eliminates this failure mode:
+1. **Developer Mode Pre-Seeding:** Before browser launch, `preseed_chrome_developer_mode(PROFILE_DIR)` writes `{"extensions": {"ui": {"developer_mode": true}}}` into `PROFILE_DIR/Default/Preferences`.
+2. **Initial Launch Target:** Chrome launches pointing directly at `chrome://extensions`.
+3. **Clipboard Assist:** `copy_to_clipboard()` automatically copies the absolute `src/extension` path to the OS clipboard (`wl-copy`, `xclip`, `xsel`, `pbcopy`, `clip`).
+4. **Verification Gate:** Stage 4 blocks until `service_worker.js` registers in `/json`.
+5. **Seamless Navigation:** Once the extension is verified, `navigate_to_notebooklm()` reloads or navigates the existing tab to `https://notebook.google.com/`. When the page loads, the companion extension's content script immediately attaches, ensuring zero broken authentication states.
+
