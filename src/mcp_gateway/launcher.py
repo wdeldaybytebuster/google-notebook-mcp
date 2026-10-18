@@ -21,7 +21,6 @@ import os
 import signal
 import sys
 import time
-import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -132,12 +131,12 @@ async def _cdp_check_auth(cdp_port: int, timeout_s: float) -> bool:
     top_pages = [p for p in pages if p.get("type") != "iframe"]
 
     # If any top-level tab is on accounts.google.com, Google sign-in is in progress
-    if any(urllib.parse.urlparse(p.get("url", "")).hostname == "accounts.google.com" for p in top_pages):
+    if any("accounts.google.com" in p.get("url", "") for p in top_pages):
         return False
 
     for page in top_pages:
         url = page.get("url", "")
-        if urllib.parse.urlparse(url).hostname in ("notebook.google.com", "notebooklm.google.com"):
+        if "notebook.google.com" in url or "notebooklm.google.com" in url:
             return True
 
     return False
