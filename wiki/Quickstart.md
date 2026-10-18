@@ -35,13 +35,13 @@ Or if you installed the package via pip or uv:
 gemini-notebook-mcp onboard
 ```
 
-### What Happens Automatically:
-1. **Browser Selection:** Checks your default browser, guards against ChromeOS Garcon bridges, and selects a compatible Chromium binary.
+### What Happens Automatically (Extension-First Pipeline):
+1. **Browser Selection:** Checks your default browser, guards against ChromeOS Garcon bridges, and selects a compatible Chromium binary (with automatic Wayland/Sommelier flags).
 2. **Native Messaging Registration:** Automatically writes the Chrome Native Messaging host manifest (`com.mcp.gemini.broker.json`) to both global and profile configuration directories, baking in the socket path and resource limits.
-3. **Broker & Browser Launch:** Cleans stale socket/lock files, starts the background Policy Broker daemon, and launches your browser in an isolated profile with remote debugging enabled.
-4. **Extension Injection:** Uses a built-in pure Python RFC 6455 WebSocket client to connect to Chrome DevTools Protocol (`ws://127.0.0.1:9222`) and load the extension via `Extensions.loadUnpacked`.
-5. **Login Detection:** Navigates to `notebook.google.com` and polls `window.WIZ_global_data` for CSRF and account hydration.
-6. **Notebook Discovery & Allowlisting:** Reads your notebooks, presents an interactive numbered list, and writes your approved notebooks to `~/.config/notebooklm-mcp-bridge/allowlist.json` and `.notebook_mcp.json`.
+3. **Broker Startup & Developer Mode Pre-Seeding:** Cleans stale socket/lock files, starts the background Policy Broker daemon, pre-seeds `Default/Preferences` with Developer mode enabled, and launches your browser pointing directly to `chrome://extensions`.
+4. **Extension Injection & Verification Gate:** Injects the companion extension via CDP `Extensions.loadUnpacked` or prompts 1-click **Load unpacked** with automatic folder path clipboard assist. Detects the active Extension ID and synchronizes manifests.
+5. **Seamless Navigation & Login Detection:** Automatically navigates the active browser tab to `https://notebook.google.com/` with the companion extension already active. Content scripts attach immediately on load, and the script polls `window.WIZ_global_data` for CSRF and account hydration.
+6. **Notebook Discovery & Allowlisting:** Reads your notebooks via Google's live `wXbhsf` RPC, presents an interactive numbered list, and writes your approved notebooks to `~/.config/notebooklm-mcp-bridge/allowlist.json` and `.notebook_mcp.json`.
 
 ---
 

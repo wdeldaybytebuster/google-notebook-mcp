@@ -40,14 +40,16 @@ The orchestrator automatically unlinks stale sockets, cleans Chrome lock files, 
 
 ---
 
-### 3. Chrome 137+ Ignores `--load-extension`
-* **Symptom:** Browser opens with an isolated profile, but `chrome://extensions` is empty.
-* **Root Cause:** Recent Chromium security and enterprise policies ignore `--load-extension` CLI flags when `--remote-debugging-port` is enabled.
+### 3. Chrome 137+ / Linux Ignores `--load-extension`
+* **Symptom:** Browser opens with an isolated profile, but `chrome://extensions` is empty or the installer hangs waiting for the companion extension.
+* **Root Cause:** Modern Chromium security and enterprise policies ignore `--load-extension` CLI flags when launching with clean profiles or `--remote-debugging-port`.
 * **Resolution:** 
-  The onboarding orchestrator automatically injects the extension via CDP `Extensions.loadUnpacked`. If loading manually:
-  1. Open `chrome://extensions`.
-  2. Toggle **Developer mode** on.
-  3. Click **Load unpacked** and select `src/extension/`.
+  `install_and_onboard.py` employs an **Extension-First Gating Protocol**:
+  1. It pre-seeds `chrome-profile/Default/Preferences` with Developer mode turned ON.
+  2. It launches Chrome pointing directly at `chrome://extensions`.
+  3. It automatically copies the `src/extension` folder path to your system clipboard (`wl-copy`, `xclip`, `xsel`, `pbcopy`, `clip`).
+  4. If automated injection was restricted, click **Load unpacked** (top-left) and press `Ctrl+V`.
+  5. As soon as the service worker registers, the script automatically navigates the browser tab to `https://notebook.google.com/`, ensuring content scripts attach properly.
 
 ---
 
