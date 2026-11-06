@@ -1,0 +1,40 @@
+version: 1
+skill: adversarial-consultation-planner
+description: Schema for tracking closed-loop consultation phases, round outputs, and synthesized invariants.
+fields:
+  consultation_id:
+    type: string
+    description: Unique consultation run identifier (UUIDv4).
+  spec_source_title:
+    type: string
+    description: Baseline specification source title decoupled from candidate plan.
+  candidate_plan_title:
+    type: string
+    description: Candidate plan or proposal title being evaluated.
+  current_phase:
+    type: string
+    enum: [RECONNAISSANCE, GAP_ANALYSIS, ADVERSARIAL_AUDIT, INVARIANT_SYNTHESIS, PLAN_ASSEMBLY, APPROVED]
+    description: Active stage in the closed-loop consultation lifecycle.
+  round1_gap_analysis:
+    type: object
+    description: Key positive findings and capabilities identified in Round 1.
+  round2_adversarial_vulnerabilities:
+    type: list
+    description: Red-team vulnerabilities uncovered across the 5 failure domains.
+    items:
+      type: string
+  remediation_invariants:
+    type: list
+    description: Synthesized non-negotiable architectural invariants (e.g. Invariants 1-9).
+    items:
+      type: object
+      properties:
+        invariant_number:
+          type: integer
+        title:
+          type: string
+        specification:
+          type: string
+  verdict:
+    type: string
+    description: Formal consultation verdict (e.g. APPROVED WITH INVARIANTS).

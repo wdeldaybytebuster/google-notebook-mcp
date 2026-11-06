@@ -1,0 +1,27 @@
+version: 1
+skill: notebook-session-guard
+description: Schema for tracking active notebook session lock state and project binding metadata.
+fields:
+  session_state:
+    type: string
+    enum: [DISCOVERY_ONLY, ACTIVE_DISPATCH, LOCKED]
+    description: Current ADR-011 lifecycle phase of the MCP gateway session.
+  locked_notebook_id:
+    type: string
+    description: UUIDv4 of the locked notebook for the current session.
+  locked_notebook_title:
+    type: string
+    description: Human-readable title of the locked notebook.
+  hmac_session_token:
+    type: string
+    description: Cryptographic session token issued upon successful lock transition.
+  rbac_mode:
+    type: string
+    enum: [READ_ONLY, INTERACTIVE]
+    description: Active access tier configured in allowlist.json.
+  project_root:
+    type: string
+    description: Absolute path of project root containing .notebook_mcp.json.
+  user_confirmed:
+    type: boolean
+    description: Flag indicating explicit conversational double-check confirmation was received.

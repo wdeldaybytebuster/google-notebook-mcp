@@ -1,0 +1,34 @@
+version: 1
+skill: studio-artifact-harvester
+description: Schema for tracking in-progress Studio artifact generation operations across polling intervals.
+fields:
+  active_operations:
+    type: list
+    description: List of active artifact generation operations currently being monitored.
+    items:
+      type: object
+      properties:
+        operation_id:
+          type: string
+          description: Unique operation handle (e.g. op_art_xxx).
+        artifact_id:
+          type: string
+          description: UUIDv4 of the artifact being generated.
+        artifact_type:
+          type: string
+          enum: [AUDIO, VIDEO, REPORT, MIND_MAP, STUDY_GUIDE]
+        started_at:
+          type: number
+          description: Epoch timestamp when generation was initiated.
+        last_polled_at:
+          type: number
+          description: Epoch timestamp of most recent status check.
+        poll_count:
+          type: integer
+          description: Number of poll cycles executed so far.
+        status:
+          type: string
+          enum: [GENERATING, READY, FAILED, TIMED_OUT]
+        destination_path:
+          type: string
+          description: Intended destination path upon completion.

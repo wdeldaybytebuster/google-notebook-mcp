@@ -294,11 +294,27 @@ When working inside a project repository, the gateway can automatically remember
 
 ---
 
+## Packaged Agent Skills Ecosystem
+
+The repository packages four production agent skills adhering to the Anthropic and OpenClaw specification:
+
+| Skill | Trigger / Description |
+| :--- | :--- |
+| **`notebooklm-research-expert`** | Grounded technical research, multi-source cross-examination, and coordinate-normalized Unicode citation verification. Enforces Mitigation M-06 grounding barrier. |
+| **`studio-artifact-harvester`** | Non-blocking discovery, asynchronous generation monitoring, and zero-OOM tmpfs binary streaming ($\le 512\text{ KiB}$) for Audio Overviews, Video Overviews, and Reports. |
+| **`notebook-session-guard`** | Enforces ADR-011 single-notebook session lock lifecycle, project workspace binding (`.notebook_mcp.json`), and granular RBAC allowlists (`READ_ONLY` vs `INTERACTIVE`). |
+| **`adversarial-consultation-planner`** | Closed-loop consultation planning with live models, spec-vs-plan decoupling, 5-domain adversarial red-team stress-testing, and remediation invariant synthesis. |
+
+*Detailed skill instructions and state schemas are available in [docs/agent-skills.md](docs/agent-skills.md).*
+
+---
+
 ## Documentation
 
 - **[GitHub Wiki](https://github.com/wdeldaybytebuster/google-notebook-mcp/wiki)**: Comprehensive online wiki with interactive quickstarts, client guides, and FAQs.
 - **[Getting Started Guide](docs/getting-started.md)**: Full walkthrough for Linux, macOS, and Windows.
 - **[Client Configuration](docs/client-configuration.md)**: Setup guides for all major AI coding agents.
+- **[Agent Skills Ecosystem](docs/agent-skills.md)**: Complete guide to the packaged skills for Claude Code, Cursor, Windsurf, and OpenClaw.
 - **[Tools Reference](docs/tools-reference.md)**: Complete parameter reference, types, and error envelopes.
 - **[Troubleshooting & FAQs](docs/troubleshooting.md)**: Diagnosing native messaging, permissions, and platform quirks.
 - **[Security Architecture](docs/security.md)**: Deep dive into TPM/DBSC containment and secret scrubbing.
