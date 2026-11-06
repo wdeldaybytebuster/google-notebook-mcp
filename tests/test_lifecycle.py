@@ -122,7 +122,7 @@ def test_js_safe_request_body_inspection() -> None:
     """M-09: inspectRequestBodySafely handles string & URLSearchParams without touching streams."""
     script = f"""
     const fs = require('fs');
-    const code = fs.readFileSync('{PAGE_MAIN_PATH}', 'utf8');
+    const code = fs.readFileSync({json.dumps(str(PAGE_MAIN_PATH))}, 'utf8');
 
     // Extract inspectRequestBodySafely function
     const fnMatch = code.match(/function inspectRequestBodySafely\\([\\s\\S]*?\\)\\s*\\{{[\\s\\S]*?\\n\\}}/);
@@ -149,7 +149,7 @@ def test_js_preflight_account_identity_guard() -> None:
     """P-03: verifyAccountIdentityPreflight enforces account allowlist & rejects unauthenticated mutations."""
     script = f"""
     const fs = require('fs');
-    const code = fs.readFileSync('{PAGE_MAIN_PATH}', 'utf8');
+    const code = fs.readFileSync({json.dumps(str(PAGE_MAIN_PATH))}, 'utf8');
 
     // Extract sets and verifyAccountIdentityPreflight
     const setsMatch = code.match(/const MUTATING_COMMANDS[\\s\\S]*?const MUTATING_RPC_IDS[\\s\\S]*?\\n\\]\\);/);
@@ -219,7 +219,7 @@ def test_js_service_worker_lifecycle_and_timeouts() -> None:
     """M-03 & Domain A: Service worker handles HEARTBEAT_PING and clamps timeouts to MAX_RPC_TIMEOUT_MS."""
     script = f"""
     const fs = require('fs');
-    const code = fs.readFileSync('{SERVICE_WORKER_PATH}', 'utf8');
+    const code = fs.readFileSync({json.dumps(str(SERVICE_WORKER_PATH))}, 'utf8');
 
     // Verify constants exist in code
     const hasMaxTimeout = code.includes('MAX_RPC_TIMEOUT_MS = 240_000');

@@ -15,6 +15,7 @@ import asyncio
 import json
 from pathlib import Path
 import struct
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
@@ -49,7 +50,7 @@ def allowlist_file(tmp_path: Path) -> Path:
 @pytest.fixture
 def broker(tmp_path: Path, allowlist_file: Path) -> BrokerDaemon:
     cfg = BrokerConfig(
-        socket_path=str(tmp_path / "test_protocol_healing.sock"),
+        socket_path=str(tmp_path / "ph.sock"),
         allowlist_path=allowlist_file,
         journal_db_path=tmp_path / "test_protocol_healing.db",
     )
@@ -234,6 +235,8 @@ async def test_heartbeat_ping_pong_recovery(broker: BrokerDaemon) -> None:
 @pytest.mark.asyncio
 async def test_heartbeat_ipc_auto_reconnect_loop(broker: BrokerDaemon, tmp_path: Path) -> None:
     """Full IPC socket test: verifies ping/pong over wire and auto-reconnect restoration."""
+    if sys.platform == "win32":
+        pytest.skip("Unix domain sockets not supported on Windows asyncio")
     # Start the broker IPC server
     await broker.start()
 

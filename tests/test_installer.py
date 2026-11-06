@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import pytest
 
 from mcp_gateway.host.installer import (
@@ -58,8 +59,9 @@ def test_install_manifest_posix(tmp_path: Path) -> None:
         data = json.loads(p.read_text(encoding="utf-8"))
         assert data["allowed_origins"] == [f"chrome-extension://{ext_id}/"]
         # Verify file permissions mode (POSIX 0o600)
-        mode = oct(p.stat().st_mode & 0o777)
-        assert mode == oct(0o600)
+        if sys.platform != "win32":
+            mode = oct(p.stat().st_mode & 0o777)
+            assert mode == oct(0o600)
 
 
 def test_install_and_uninstall_windows_mock_registry(tmp_path: Path) -> None:

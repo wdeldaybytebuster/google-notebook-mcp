@@ -30,7 +30,7 @@ def test_get_default_ipc_path_darwin(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.delenv("MCP_BROKER_SOCKET", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     path = get_default_ipc_path(platform_name="darwin")
-    assert "Library/Application Support/notebooklm-mcp" in path
+    assert "Library/Application Support/notebooklm-mcp" in path.replace("\\", "/")
     assert path.endswith(DEFAULT_POSIX_SOCKET_NAME)
 
 
@@ -45,7 +45,9 @@ def test_get_default_ipc_path_linux(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
 @pytest.mark.asyncio
 async def test_unix_socket_server_roundtrip(tmp_path: Path) -> None:
-    sock_path = tmp_path / "test_broker.sock"
+    if sys.platform == "win32":
+        pytest.skip("Unix domain sockets not supported on Windows asyncio")
+    sock_path = tmp_path / "tb.sock"
     received_messages: list[str] = []
 
     async def client_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -84,7 +86,7 @@ async def test_unix_socket_server_singleton_lock(tmp_path: Path) -> None:
     if sys.platform == "win32":
         pytest.skip("POSIX socket locking test")
 
-    sock_path = tmp_path / "singleton_test.sock"
+    sock_path = tmp_path / "st.sock"
 
     async def dummy_cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         pass

@@ -73,6 +73,9 @@ class UnixSocketServer:
             except OSError:
                 pass
 
+        if sys.platform == "win32" or not hasattr(asyncio, "start_unix_server"):
+            raise OSError("Unix domain sockets are not supported on this platform's asyncio.")
+
         self._server = await asyncio.start_unix_server(
             self.client_connected_cb,
             path=str(self.path),
@@ -402,4 +405,6 @@ async def open_ipc_connection(
             return reader, writer
         raise NotImplementedError("Named pipes require Windows platform.")
     else:
+        if sys.platform == "win32" or not hasattr(asyncio, "open_unix_connection"):
+            raise OSError("Unix domain sockets are not supported on this platform's asyncio.")
         return await asyncio.open_unix_connection(target_path)

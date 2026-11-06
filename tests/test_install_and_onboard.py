@@ -119,7 +119,7 @@ def test_write_native_host_manifests(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_garcon_detection_and_rejection() -> None:
-    with patch("subprocess.run") as mock_run:
+    with patch("platform.system", return_value="Linux"), patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="garcon-url-handler.desktop\n")
         assert onboard.detect_os_default_browser() == "garcon-url-handler.desktop"
 

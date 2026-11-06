@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import struct
 from pathlib import Path
+import struct
+import sys
 from typing import Any
 from unittest.mock import MagicMock, patch
 import pytest
@@ -244,10 +245,12 @@ async def test_cdp_check_auth_ignores_accounts_string_in_query_parameter() -> No
 @pytest.mark.asyncio
 async def test_allowlist_wizard_broker_unreachable(tmp_path: Path) -> None:
     """Wizard returns exit code 1 when broker is not running."""
+    if sys.platform == "win32":
+        pytest.skip("Unix domain sockets not supported on Windows asyncio")
     from mcp_gateway.allowlist_wizard import run_seed_wizard
 
     result = await run_seed_wizard(
-        socket_path=str(tmp_path / "nonexistent.sock"),
+        socket_path=str(tmp_path / "ne.sock"),
         allowlist_path=tmp_path / "allowlist.json",
     )
     assert result == 1
@@ -256,6 +259,8 @@ async def test_allowlist_wizard_broker_unreachable(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_allowlist_wizard_saves_selection(tmp_path: Path) -> None:
     """Wizard writes selected notebook IDs to allowlist.json."""
+    if sys.platform == "win32":
+        pytest.skip("Unix domain sockets not supported on Windows asyncio")
     from mcp_gateway.allowlist_wizard import run_seed_wizard
 
     # Simulate a running broker that returns two notebooks
@@ -281,7 +286,7 @@ async def test_allowlist_wizard_saves_selection(tmp_path: Path) -> None:
         await writer.drain()
         writer.close()
 
-    sock_path = str(tmp_path / "broker.sock")
+    sock_path = str(tmp_path / "b1.sock")
     server = await asyncio.start_unix_server(fake_handler, path=sock_path)
 
     allowlist_path = tmp_path / "allowlist.json"
@@ -305,6 +310,8 @@ async def test_allowlist_wizard_saves_selection(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_allowlist_wizard_select_all(tmp_path: Path) -> None:
     """'all' selection allowlists every returned notebook."""
+    if sys.platform == "win32":
+        pytest.skip("Unix domain sockets not supported on Windows asyncio")
     from mcp_gateway.allowlist_wizard import run_seed_wizard
 
     IPC = ">I"
@@ -328,7 +335,7 @@ async def test_allowlist_wizard_select_all(tmp_path: Path) -> None:
         await writer.drain()
         writer.close()
 
-    sock_path = str(tmp_path / "broker2.sock")
+    sock_path = str(tmp_path / "b2.sock")
     server = await asyncio.start_unix_server(fake_handler, path=sock_path)
 
     allowlist_path = tmp_path / "allowlist2.json"

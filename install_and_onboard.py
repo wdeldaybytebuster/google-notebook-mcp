@@ -456,7 +456,7 @@ def detect_os_default_browser() -> str | None:
                 check=False,
             )
             if res.returncode == 0 and res.stdout:
-                return res.stdout.lower()
+                return res.stdout.strip().lower()
         elif sys_name == "Windows":
             try:
                 winreg = sys.modules.get("winreg") or __import__("winreg")
@@ -789,11 +789,14 @@ def copy_to_clipboard(text: str) -> bool:
 
 def is_socket_live(socket_path: Path) -> bool:
     """Probe if socket_path is listening and responding to connections."""
-    if platform.system() == "Windows":
-        return socket_path.exists()
+    if str(socket_path).startswith(r"\\.\pipe"):
+        return False
 
     if not socket_path.exists():
         return False
+
+    if not hasattr(socket, "AF_UNIX"):
+        return socket_path.exists()
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(0.5)

@@ -292,7 +292,7 @@ def test_scotty_session_url_caching_and_resumption_js() -> None:
     """
     script = f"""
     const fs = require('fs');
-    const code = fs.readFileSync('{SERVICE_WORKER_PATH}', 'utf8');
+    const code = fs.readFileSync({json.dumps(str(SERVICE_WORKER_PATH))}, 'utf8');
 
     // In-memory mock for chrome APIs and chrome.storage.session
     const storageStore = new Map();
@@ -435,7 +435,7 @@ def test_scotty_chunk_collector_js() -> None:
     """
     script = f"""
     const fs = require('fs');
-    const code = fs.readFileSync('{SERVICE_WORKER_PATH}', 'utf8');
+    const code = fs.readFileSync({json.dumps(str(SERVICE_WORKER_PATH))}, 'utf8');
 
     const storageStore = new Map();
     global.chrome = {{
@@ -543,7 +543,7 @@ def test_scotty_routes_via_page_main_and_sw_webui_bridges_js() -> None:
     """
     script = f"""
     const fs = require('fs');
-    const code = fs.readFileSync('{SERVICE_WORKER_PATH}', 'utf8');
+    const code = fs.readFileSync({json.dumps(str(SERVICE_WORKER_PATH))}, 'utf8');
 
     let nativeOnMessageListener = null;
     let nativeOnDisconnectListener = null;

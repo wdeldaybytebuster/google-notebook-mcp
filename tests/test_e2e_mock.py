@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 import struct
+import sys
 from typing import Any, cast
 import pytest
 
@@ -134,7 +135,7 @@ def allowlist_file(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def socket_path(tmp_path: Path) -> str:
-    return str(tmp_path / "e2e_mock_broker.sock")
+    return str(tmp_path / "e2e.sock")
 
 
 @pytest.fixture
@@ -154,6 +155,7 @@ def extract_text_payload(result: types.CallToolResult) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(item.text))
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix domain sockets not supported on Windows asyncio")
 @pytest.mark.asyncio
 async def test_hermetic_end_to_end_mcp_flow(
     broker: BrokerDaemon,
