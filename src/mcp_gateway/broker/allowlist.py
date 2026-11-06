@@ -56,30 +56,31 @@ def parse_and_validate_notebook_id(raw_input: str) -> str:
     if ".." in candidate or "%2e" in lowered_raw or "\\" in candidate:
         raise ValueError("Invalid notebook ID: path traversal characters are not permitted.")
 
-    has_scheme = "://" in candidate
-    url_str = candidate if has_scheme else f"https://{candidate}"
-    parsed = urlparse(url_str)
-    should_parse_as_url = has_scheme or bool(parsed.netloc)
+    # Canonical bare UUIDv4 fast-path: avoids unnecessary URL parsing
+    if UUID_V4_REGEX.match(lowered_raw):
+        return lowered_raw
 
-    if should_parse_as_url:
-        if parsed.scheme not in ("https", "http") or parsed.hostname not in ALLOWED_NOTEBOOK_HOSTS:
-            raise ValueError(
-                f"Invalid notebook ID: URL host {parsed.hostname!r} is not notebook.google.com."
-            )
-        path_parts = [p for p in parsed.path.split("/") if p]
-        if len(path_parts) == 2 and path_parts[0] == "notebook":
-            candidate = path_parts[1]
-        elif (
-            len(path_parts) == 4
-            and path_parts[0] == "u"
-            and path_parts[1].isdigit()
-            and path_parts[2] == "notebook"
-        ):
-            candidate = path_parts[3]
-        else:
-            raise ValueError(
-                "Invalid notebook ID: URL must follow https://notebook.google.com/notebook/<uuid>."
-            )
+    # Otherwise, candidate must be a valid NotebookLM URL
+    url_str = candidate if "://" in candidate else f"https://{candidate}"
+    parsed = urlparse(url_str)
+    if parsed.scheme not in ("https", "http") or parsed.hostname not in ALLOWED_NOTEBOOK_HOSTS:
+        raise ValueError(
+            f"Invalid notebook ID: URL host {parsed.hostname!r} is not notebook.google.com."
+        )
+    path_parts = [p for p in parsed.path.split("/") if p]
+    if len(path_parts) == 2 and path_parts[0] == "notebook":
+        candidate = path_parts[1]
+    elif (
+        len(path_parts) == 4
+        and path_parts[0] == "u"
+        and path_parts[1].isdigit()
+        and path_parts[2] == "notebook"
+    ):
+        candidate = path_parts[3]
+    else:
+        raise ValueError(
+            "Invalid notebook ID: URL must follow https://notebook.google.com/notebook/<uuid>."
+        )
 
     normalized = candidate.strip().lower()
     if not UUID_V4_REGEX.match(normalized):
