@@ -42,3 +42,63 @@ This project is indexed by GitNexus as **google-notebook-mcp** (2218 symbols, 39
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+# Google Gemini Notebook MCP Gateway — Claude Developer Guide
+
+## Core Architecture
+- **Zero Credential Export (DBSC / TPM Containment):** Session tokens (`SID`, `HSID`, `SSID`, `ya29.*`, `SNlM0e`) never leave Chrome's native memory. All outbound IPC data is sanitized via `secret_scrubber.py`.
+- **Closed 9-Tool MCP Surface:** Strictly exposes `select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `query_notebook`, `add_source`, `create_note`, `list_notes`, `delete_note`. All schemas enforce `additionalProperties: false` and `extra="forbid"`.
+- **ADR-011 Interactive Session Lock:** Requires `select_notebook` prior to any notebook operations (`SESSION_UNLOCKED` guard). Once locked, subsequent calls with different IDs return `SESSION_LOCKED`.
+- **Project Directory Binding (`.notebook_mcp.json`):** Remembers active notebook per workspace and prompts user with double-check confirmation at chat start.
+
+## Common CLI & Developer Commands
+```bash
+# Automated 1-step onboarding
+python3 install_and_onboard.py
+
+# CLI Commands
+gemini-notebook-mcp --help
+gemini-notebook-mcp onboard       # Run onboarding wizard
+gemini-notebook-mcp install       # Register native messaging manifest
+gemini-notebook-mcp launch        # Launch dedicated Chrome & broker
+gemini-notebook-mcp serve         # Run background broker daemon
+gemini-notebook-mcp mcp           # Run MCP stdio facade
+gemini-notebook-mcp allowlist seed# Interactive notebook allowlist wizard
+
+# Code Quality & Testing
+uv run ruff check .               # Linter
+uv run mypy src/mcp_gateway --strict # Strict type checking
+uv run pytest tests/ -v           # Full test suite (214 tests)
+```
+
+## Connecting Claude to the MCP Gateway
+
+### Claude Desktop (`claude_desktop_config.json`)
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "gemini-notebook": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/google-notebook-mcp",
+        "run",
+        "gemini-notebook-mcp",
+        "mcp"
+      ],
+      "env": {
+        "UV_THREADPOOL_SIZE": "3"
+      }
+    }
+  }
+}
+```
+
+### Claude Code
+```bash
+claude mcp add gemini-notebook uv -- --directory /absolute/path/to/google-notebook-mcp run gemini-notebook-mcp mcp
+```

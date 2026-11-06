@@ -111,6 +111,11 @@ Register via CLI command:
 claude mcp add gemini-notebook python3 -- -m mcp_gateway.cli mcp
 ```
 
+Or when running with `uv`:
+```bash
+claude mcp add gemini-notebook uv -- --directory /ABSOLUTE/PATH/TO/google-notebook-mcp run gemini-notebook-mcp mcp
+```
+
 Or add directly to `~/.claude.json` or `.claude.json`:
 
 ```json
@@ -138,7 +143,77 @@ claude mcp list
 
 ---
 
-### D. Cursor
+### D. Claude Desktop
+Add the gateway to your `claude_desktop_config.json`:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+#### Option 1: Using `uv` (Recommended — zero path-dependency issues)
+```json
+{
+  "mcpServers": {
+    "gemini-notebook": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/ABSOLUTE/PATH/TO/google-notebook-mcp",
+        "run",
+        "gemini-notebook-mcp",
+        "mcp"
+      ],
+      "env": {
+        "UV_THREADPOOL_SIZE": "3"
+      }
+    }
+  }
+}
+```
+
+#### Option 2: Using Virtual Environment Python
+```json
+{
+  "mcpServers": {
+    "gemini-notebook": {
+      "command": "/ABSOLUTE/PATH/TO/google-notebook-mcp/.venv/bin/python",
+      "args": [
+        "-m",
+        "mcp_gateway.cli",
+        "mcp"
+      ],
+      "env": {
+        "UV_THREADPOOL_SIZE": "3"
+      }
+    }
+  }
+}
+```
+
+#### Option 3: Standard Python / Global Install
+```json
+{
+  "mcpServers": {
+    "gemini-notebook": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "mcp_gateway.cli",
+        "mcp"
+      ],
+      "env": {
+        "UV_THREADPOOL_SIZE": "3"
+      }
+    }
+  }
+}
+```
+
+*Verification:* Restart Claude Desktop and look for the hammer 🔨 icon in the bottom-right corner of the chat input. Click it to verify all 9 tools (`select_notebook`, `list_notebooks`, `query_notebook`, etc.) are active.
+
+---
+
+### E. Cursor
 Add to `~/.cursor/mcp.json` or `.cursor/mcp.json` within your workspace:
 
 ```json
@@ -163,7 +238,7 @@ Add to `~/.cursor/mcp.json` or `.cursor/mcp.json` within your workspace:
 
 ---
 
-### E. Windsurf
+### F. Windsurf
 Add to `~/.codeium/windsurf/mcp_config.json`:
 
 ```json

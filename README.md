@@ -163,10 +163,40 @@ gemini-notebook-mcp allowlist seed
 
 Add the gateway to your favorite AI coding environment:
 
+### Claude Desktop (`claude_desktop_config.json`)
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "gemini-notebook": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/ABSOLUTE/PATH/TO/google-notebook-mcp",
+        "run",
+        "gemini-notebook-mcp",
+        "mcp"
+      ],
+      "env": {
+        "UV_THREADPOOL_SIZE": "3"
+      }
+    }
+  }
+}
+```
+*(If installed globally or in an active environment, you can replace the command with `"python3"` and args with `["-m", "mcp_gateway.cli", "mcp"]`)*.
+
 ### Claude Code
 Run in your terminal:
 ```bash
 claude mcp add gemini-notebook -- python3 -m mcp_gateway.cli mcp
+```
+Or with `uv`:
+```bash
+claude mcp add gemini-notebook uv -- --directory /ABSOLUTE/PATH/TO/google-notebook-mcp run gemini-notebook-mcp mcp
 ```
 
 ### Cursor (`.cursor/mcp.json` or Global Settings)

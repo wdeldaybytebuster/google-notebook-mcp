@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gemini-notebook": {
+      "command": "python3",
+      "args": ["-m", "mcp_gateway.cli", "mcp"],
+      "env": {
+        "UV_THREADPOOL_SIZE": "3"
+      }
+    }
+  }
+}
