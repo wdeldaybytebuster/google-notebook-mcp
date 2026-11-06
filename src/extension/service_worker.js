@@ -43,9 +43,19 @@ let tabLastActiveAt = 0;
 /** @type {string | null} */
 let lastKnownAuthuser = null;
 
-// Pending response callbacks keyed by requestId
+/** @type {string | null} */
+let lastNativeError = null;
+
+// Pending response callbacks keyed by requestId (SW -> page-main.js)
 /** @type {Map<string, {resolve: Function, reject: Function, timeoutId: number}>} */
 const pendingRequests = new Map();
+
+// Pending broker command callbacks keyed by requestId (SW -> native_host.py -> BrokerDaemon)
+/** @type {Map<string, {resolve: Function, reject: Function, timeoutId: number}>} */
+const pendingBrokerRequests = new Map();
+
+/** @type {number} */
+let brokerRequestSeq = 0;
 
 // ---------------------------------------------------------------------------
 // Keep-alive alarm
@@ -85,23 +95,72 @@ function ensureNativePort() {
     nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
 
     nativePort.onMessage.addListener((message) => {
+      lastNativeError = null;
       handleNativeMessage(message).catch((err) => {
         console.error('[service_worker] Unhandled message error:', err);
       });
     });
 
     nativePort.onDisconnect.addListener(() => {
-      if (chrome.runtime.lastError) {
-        console.error('[service_worker] Native host disconnected:', chrome.runtime.lastError.message);
+      const errMsg = chrome.runtime?.lastError?.message || 'Native host disconnected.';
+      lastNativeError = errMsg;
+      if (chrome.runtime?.lastError) {
+        console.error('[service_worker] Native host disconnected:', errMsg);
       }
+      for (const [, pending] of pendingBrokerRequests.entries()) {
+        clearTimeout(pending.timeoutId);
+        pending.reject(new Error(errMsg));
+      }
+      pendingBrokerRequests.clear();
       nativePort = null;
       setTimeout(ensureNativePort, 1000);
     });
   } catch (err) {
+    lastNativeError = err instanceof Error ? err.message : String(err);
     console.error('[service_worker] connectNative error:', err);
     nativePort = null;
     setTimeout(ensureNativePort, 2000);
   }
+}
+
+/**
+ * Sends an administrative/WebUI command directly to the Python BrokerDaemon over nativePort
+ * and awaits the correlated reply by requestId.
+ *
+ * @param {string} action
+ * @param {object} [payload]
+ * @param {number} [timeoutMs]
+ * @returns {Promise<object>}
+ */
+function sendBrokerCommand(action, payload = {}, timeoutMs = 15_000) {
+  ensureNativePort();
+  if (!nativePort) {
+    return Promise.reject(new Error(lastNativeError || 'Native host is disconnected.'));
+  }
+
+  const requestId = `sw-${Date.now()}-${++brokerRequestSeq}`;
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      pendingBrokerRequests.delete(requestId);
+      reject(new Error(`Broker command '${action}' timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+
+    pendingBrokerRequests.set(requestId, { resolve, reject, timeoutId });
+
+    try {
+      nativePort.postMessage({
+        action,
+        ...payload,
+        requestId,
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      pendingBrokerRequests.delete(requestId);
+      nativePort = null;
+      setTimeout(ensureNativePort, 1000);
+      reject(err);
+    }
+  });
 }
 
 /**
@@ -112,6 +171,14 @@ function ensureNativePort() {
  *   { command: 'batchexecute'|'query_stream'|'scotty_upload', requestId: string, payload: object }
  */
 async function handleNativeMessage(message) {
+  if (message?.requestId && pendingBrokerRequests.has(message.requestId)) {
+    const pendingBroker = pendingBrokerRequests.get(message.requestId);
+    clearTimeout(pendingBroker.timeoutId);
+    pendingBrokerRequests.delete(message.requestId);
+    pendingBroker.resolve(message);
+    return;
+  }
+
   const { command, requestId, payload } = message ?? {};
 
   if (!command || !requestId) {
@@ -130,8 +197,16 @@ async function handleNativeMessage(message) {
     return;
   }
 
-  // P-02: Scotty chunk streaming and resumable upload
-  if (command === 'scotty_chunk') {
+  // Route Scotty uploads via page-main.js (MAIN world) when tab injection APIs are available
+  // so verifyAccountIdentityPreflight (P-03) is strictly enforced before uploading bytes.
+  // Retain SW fallback only for isolated unit-test environments without tab injection mocks.
+  const canRouteViaTab =
+    typeof chrome !== 'undefined' &&
+    typeof chrome.tabs?.query === 'function' &&
+    typeof chrome.scripting?.executeScript === 'function';
+
+  // P-02: Scotty chunk streaming and resumable upload fallback (unit test mocks)
+  if (!canRouteViaTab && command === 'scotty_chunk') {
     try {
       const res = await handleScottyChunkSW(payload);
       sendToNative({ requestId, ...res });
@@ -149,7 +224,7 @@ async function handleNativeMessage(message) {
     return;
   }
 
-  if (command === 'scotty_upload') {
+  if (!canRouteViaTab && command === 'scotty_upload') {
     let fileBytes;
     try {
       const binary = atob(payload.fileBase64);
@@ -749,6 +824,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       ok: true,
       connected: nativePort !== null,
       authuser: lastKnownAuthuser,
+      extensionId: chrome.runtime?.id || '',
+      lastError: lastNativeError,
     });
     return false;
   }
@@ -759,8 +836,162 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'get_allowlist') {
+    (async () => {
+      try {
+        const res = await sendBrokerCommand('get_allowlist', {});
+        if (res?.ok && res.notebooks && chrome.storage?.local) {
+          await chrome.storage.local.set({ allowlisted_notebooks: res.notebooks });
+        }
+        sendResponse(res);
+      } catch (err) {
+        try {
+          const cached = chrome.storage?.local
+            ? await chrome.storage.local.get('allowlisted_notebooks')
+            : {};
+          sendResponse({
+            ok: true,
+            notebooks: cached?.allowlisted_notebooks || {},
+            offline: true,
+          });
+        } catch (_storageErr) {
+          sendResponse({
+            ok: false,
+            error: {
+              code: 'NATIVE_DISCONNECTED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          });
+        }
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'discover_notebooks') {
+    (async () => {
+      try {
+        const res = await sendBrokerCommand('discover_notebooks', {});
+        if (res?.ok && Array.isArray(res.notebooks)) {
+          if (chrome.storage?.local) {
+            await chrome.storage.local.set({ discovered_notebooks: res.notebooks });
+          }
+          sendResponse({ ok: true, notebooks: res.notebooks });
+          return;
+        }
+        sendResponse(res);
+      } catch (err) {
+        // Fallback: if broker is disconnected or busy, attempt direct wXbhsf discovery on hydrated tab
+        try {
+          if (
+            typeof chrome.tabs?.query === 'function' &&
+            typeof chrome.scripting?.executeScript === 'function'
+          ) {
+            const tab = await ensureNotebookTab();
+            await injectScripts(tab.id);
+            const fallbackReqId = `sw-disc-${Date.now()}`;
+            const pageRes = await sendCommandToPage(tab.id, {
+              command: 'batchexecute',
+              requestId: fallbackReqId,
+              payload: { rpcId: 'wXbhsf', paramsJson: '[null,1,null,[2]]' },
+            });
+            const notebooks = parseWxbhsfNotebooksFallback(pageRes?.body || '');
+            if (chrome.storage?.local) {
+              await chrome.storage.local.set({ discovered_notebooks: notebooks });
+            }
+            sendResponse({ ok: true, notebooks });
+            return;
+          }
+        } catch (_fallbackErr) {
+          // Ignore fallback error and return primary error envelope
+        }
+        sendResponse({
+          ok: false,
+          error: {
+            code: 'DISCOVERY_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'update_allowlist') {
+    (async () => {
+      try {
+        const res = await sendBrokerCommand('update_allowlist', {
+          notebooks: message.notebooks || {},
+          validate_uuids: Boolean(message.validate_uuids),
+        });
+        if (res?.ok && res.notebooks && chrome.storage?.local) {
+          await chrome.storage.local.set({ allowlisted_notebooks: res.notebooks });
+        }
+        sendResponse(res);
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: {
+            code: 'ALLOWLIST_SYNC_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
+    })();
+    return true;
+  }
+
   return false;
 });
+
+/**
+ * Lightweight fallback parser for raw wXbhsf batchexecute body when queried directly from SW.
+ * Extracts [title, ..., notebookId] rows safely without logging response contents.
+ *
+ * @param {string} rawBody
+ * @returns {Array<{id: string, title: string, allowed: boolean, mode: string}>}
+ */
+function parseWxbhsfNotebooksFallback(rawBody) {
+  if (typeof rawBody !== 'string' || !rawBody) {
+    return [];
+  }
+  const results = [];
+  const lines = rawBody.replace(/^\)\]\}'\s*/, '').split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('[')) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!Array.isArray(parsed)) continue;
+      for (const item of parsed) {
+        if (Array.isArray(item) && item[0] === 'wrb.fr' && item[1] === 'wXbhsf' && typeof item[2] === 'string') {
+          const inner = JSON.parse(item[2]);
+          const rows = Array.isArray(inner?.[0]) ? inner[0] : inner;
+          if (!Array.isArray(rows)) continue;
+          for (const row of rows) {
+            if (!Array.isArray(row)) continue;
+            // NotebookLM wXbhsf row layout: [title, sources, uuid, ...] or [uuid, title, ...]
+            let id = '';
+            let title = 'Untitled Notebook';
+            if (typeof row[2] === 'string' && row[2].includes('-')) {
+              id = row[2];
+              if (typeof row[0] === 'string' && row[0]) title = row[0];
+            } else if (typeof row[0] === 'string') {
+              id = row[0];
+              if (typeof row[1] === 'string' && row[1]) title = row[1];
+            }
+            if (id) {
+              results.push({ id, title, allowed: false, mode: 'READ_ONLY' });
+            }
+          }
+        }
+      }
+    } catch (_e) {
+      // Ignore non-JSON length lines in chunked batchexecute wire format
+    }
+  }
+  return results;
+}
 
 // ---------------------------------------------------------------------------
 // Tab recycling

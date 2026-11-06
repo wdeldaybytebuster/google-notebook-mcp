@@ -63,6 +63,45 @@ def get_target_manifest_directories(platform_name: str | None = None) -> list[Pa
         return [home / ".config" / "NativeMessagingHosts"]
 
 
+def get_manifest_dir(
+    browser: str = "google-chrome",
+    platform_name: str | None = None,
+) -> Path:
+    """Returns the primary native messaging manifest directory for a specific browser family."""
+    plat = (platform_name or sys.platform).lower()
+    home = Path.home()
+    b_norm = browser.strip().lower()
+
+    if plat.startswith("linux"):
+        linux_map: dict[str, Path] = {
+            "google-chrome": home / ".config" / "google-chrome" / "NativeMessagingHosts",
+            "google-chrome-beta": home / ".config" / "google-chrome-beta" / "NativeMessagingHosts",
+            "chromium": home / ".config" / "chromium" / "NativeMessagingHosts",
+            "brave": home / ".config" / "BraveSoftware" / "Brave-Browser" / "NativeMessagingHosts",
+            "edge": home / ".config" / "microsoft-edge" / "NativeMessagingHosts",
+            "microsoft-edge": home / ".config" / "microsoft-edge" / "NativeMessagingHosts",
+        }
+        return linux_map.get(b_norm, home / ".config" / browser / "NativeMessagingHosts")
+    if plat == "darwin":
+        darwin_map: dict[str, Path] = {
+            "google-chrome": home / "Library" / "Application Support" / "Google" / "Chrome" / "NativeMessagingHosts",
+            "google-chrome-beta": home / "Library" / "Application Support" / "Google" / "Chrome Beta" / "NativeMessagingHosts",
+            "chromium": home / "Library" / "Application Support" / "Chromium" / "NativeMessagingHosts",
+            "brave": home / "Library" / "Application Support" / "BraveSoftware" / "Brave-Browser" / "NativeMessagingHosts",
+            "edge": home / "Library" / "Application Support" / "Microsoft Edge" / "NativeMessagingHosts",
+            "microsoft-edge": home / "Library" / "Application Support" / "Microsoft Edge" / "NativeMessagingHosts",
+        }
+        return darwin_map.get(
+            b_norm,
+            home / "Library" / "Application Support" / "Google" / "Chrome" / "NativeMessagingHosts",
+        )
+    if plat in ("win32", "windows"):
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) if appdata else home / "AppData" / "Roaming"
+        return base / HOST_NAME
+    return home / ".config" / "NativeMessagingHosts"
+
+
 EXTENSION_ID_REGEX = re.compile(r"^[a-z]{32}$")
 
 
@@ -163,6 +202,7 @@ def install_manifest(
     custom_target_dirs: list[Path] | None = None,
     host_name: str = HOST_NAME,
     registry_writer: Callable[[str, str], None] | None = None,
+    browser: str | None = None,
 ) -> list[Path]:
     """Installs the Native Messaging manifest to platform-appropriate locations.
 
@@ -174,7 +214,12 @@ def install_manifest(
         host_path=host_path,
         host_name=host_name,
     )
-    targets = custom_target_dirs or get_target_manifest_directories(platform_name=plat)
+    if custom_target_dirs is not None:
+        targets = custom_target_dirs
+    elif browser is not None:
+        targets = [get_manifest_dir(browser=browser, platform_name=plat)]
+    else:
+        targets = get_target_manifest_directories(platform_name=plat)
     installed_paths: list[Path] = []
 
     for target_dir in targets:

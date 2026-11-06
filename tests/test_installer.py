@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from typing import Any
 import pytest
 
 from mcp_gateway.host.installer import (
@@ -13,7 +11,6 @@ from mcp_gateway.host.installer import (
     install_manifest,
     main,
     uninstall_manifest,
-    write_manifest_file,
 )
 
 
@@ -161,5 +158,22 @@ def test_validate_extension_id() -> None:
 def test_invalid_extension_id_raises() -> None:
     with pytest.raises(ValueError, match="Invalid extension_id"):
         generate_manifest(extension_id="invalid-id")
+
+
+def test_setup_native_host_cli_script_writes_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import setup_native_host
+
+    monkeypatch.setattr(
+        "mcp_gateway.host.installer.get_manifest_dir",
+        lambda **_kwargs: tmp_path,
+    )
+    ext_id = "a" * 32
+    rc = setup_native_host.main(["--extension-id", ext_id])
+    assert rc == 0
+    manifest_file = tmp_path / "com.mcp.gemini.broker.json"
+    assert manifest_file.exists()
+    content = json.loads(manifest_file.read_text(encoding="utf-8"))
+    assert f"chrome-extension://{ext_id}/" in content["allowed_origins"]
+
 
 
