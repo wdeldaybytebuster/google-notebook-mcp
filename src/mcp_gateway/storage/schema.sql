@@ -3,7 +3,7 @@
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
-PRAGMA user_version=2;
+PRAGMA user_version=3;
 
 CREATE TABLE IF NOT EXISTS mutation_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,6 +25,14 @@ CREATE TABLE IF NOT EXISTS mutation_events (
     new_state TEXT,
     detail TEXT,
     occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS query_cache (
+    cache_key TEXT PRIMARY KEY,
+    notebook_id TEXT NOT NULL,
+    query_text TEXT NOT NULL,
+    response_payload TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mutation_journal_request_key ON mutation_journal(request_key);

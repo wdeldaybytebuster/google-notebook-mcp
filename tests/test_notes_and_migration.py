@@ -114,10 +114,10 @@ def test_sqlite_user_version_migration(tmp_path: Path) -> None:
     # Initialize MutationJournal which executes _run_migrations
     journal = MutationJournal(db_file)
 
-    # Verify user_version bumped to 2
+    # Verify user_version bumped to 3 (v1 -> v2 CHECK expansion -> v3 query_cache)
     cur = journal._conn.execute("PRAGMA user_version;")
     version = cur.fetchone()[0]
-    assert version == 2
+    assert version == 3
 
     # Verify legacy record was preserved
     rec = journal.get("v1-key")

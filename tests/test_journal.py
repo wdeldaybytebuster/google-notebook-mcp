@@ -179,3 +179,109 @@ def test_list_by_notebook(journal: MutationJournal, secret: bytes) -> None:
     results = journal.list_by_notebook("nb-target")
     assert len(results) == 2
     assert [r.request_key for r in results] == ["req-a", "req-c"]
+
+
+def test_dedicated_query_cache_stores_and_replays_without_polluting_mutation_journal(
+    journal: MutationJournal,
+) -> None:
+    import json
+
+    payload_str = json.dumps({
+        "answer": "DBSC binds cookies to hardware TPM keys.",
+        "citations": [
+            {
+                "source_id": "src-1",
+                "text_snippet": "hardware TPM keys",
+                "start_char": 20,
+                "end_char": 37,
+            }
+        ],
+    })
+
+    journal.put_query_cache(
+        cache_key="req-query-cache-1",
+        notebook_id="nb-001",
+        query_text="What is DBSC?",
+        response_payload=payload_str,
+    )
+
+    cached = journal.get_query_cache("req-query-cache-1")
+    assert cached is not None
+    assert cached["cache_key"] == "req-query-cache-1"
+    assert cached["notebook_id"] == "nb-001"
+    assert cached["query_text"] == "What is DBSC?"
+    assert json.loads(cached["response_payload"])["answer"] == "DBSC binds cookies to hardware TPM keys."
+    assert journal.get_query_cache("non-existent-key") is None
+
+    # Verify mutation_journal schema was NOT polluted with response_json
+    cols = [
+        str(row[1])
+        for row in journal._conn.execute("PRAGMA table_info(mutation_journal);").fetchall()
+    ]
+    assert "response_json" not in cols
+
+
+@pytest.mark.asyncio
+async def test_query_notebook_replays_cached_answer_and_citations(tmp_path: Path) -> None:
+    import json
+    from unittest.mock import AsyncMock, patch
+    from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon
+
+    allowlist_p = tmp_path / "allowlist.json"
+    allowlist_p.write_text(
+        json.dumps({
+            "version": 2,
+            "provider_mode": "browser",
+            "accounts": [],
+            "notebooks": {"nb-q1": {"title": "Query NB", "mode": "READ_ONLY"}},
+        }),
+        encoding="utf-8",
+    )
+    daemon = BrokerDaemon(
+        BrokerConfig(
+            socket_path=str(tmp_path / "q.sock"),
+            allowlist_path=allowlist_p,
+            journal_db_path=tmp_path / "journal.db",
+        )
+    )
+    await daemon.dispatch({"action": "select_notebook", "notebook_id": "nb-q1"})
+
+    fixtures = json.loads(
+        (Path(__file__).parent / "fixtures" / "golden_wire_captures.json").read_text(encoding="utf-8")
+    )
+    stream_body = (
+        json.dumps([[fixtures["non_ascii_citation"]["source_text"]]])
+        + "\n"
+        + bytes.fromhex(fixtures["non_ascii_citation"]["hex"]).decode("utf-8")
+        + "\n[null]\n"
+    )
+
+    with patch.object(
+        daemon,
+        "send_to_companion",
+        new=AsyncMock(return_value={"ok": True, "body": stream_body}),
+    ) as mock_send:
+        first = await daemon.dispatch({
+            "action": "query_notebook",
+            "notebook_id": "nb-q1",
+            "question": "How does DBSC work?",
+            "request_key": "req-q-replay-1",
+        })
+        assert first["ok"] is True
+        assert len(first["answer"]) > 0
+        assert len(first["citations"]) >= 1
+        assert mock_send.call_count == 1
+
+        # Second call with same request_key replays from query_cache without touching companion
+        replay = await daemon.dispatch({
+            "action": "query_notebook",
+            "notebook_id": "nb-q1",
+            "question": "How does DBSC work?",
+            "request_key": "req-q-replay-1",
+        })
+        assert replay["ok"] is True
+        assert replay["cached"] is True
+        assert replay["answer"] == first["answer"]
+        assert replay["citations"] == first["citations"]
+        assert mock_send.call_count == 1
+    daemon.journal.close()

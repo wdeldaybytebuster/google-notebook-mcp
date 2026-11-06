@@ -1185,6 +1185,19 @@ class BrokerDaemon:
                     retryable=False,
                 ).to_dict()
             elif existing.state == MutationState.CONFIRMED:
+                cached_entry = self.journal.get_query_cache(request_key)
+                if cached_entry is not None:
+                    try:
+                        parsed = json.loads(cached_entry["response_payload"])
+                        if isinstance(parsed, dict):
+                            return {
+                                "ok": True,
+                                "answer": str(parsed.get("answer", "")),
+                                "citations": list(parsed.get("citations", [])),
+                                "cached": True,
+                            }
+                    except Exception:
+                        pass
                 return {
                     "ok": True,
                     "answer": "Cached result for confirmed query.",
@@ -1324,21 +1337,33 @@ class BrokerDaemon:
                 retryable=False,
             ).to_dict()
 
+        serialized_citations = [
+            {
+                "source_id": cit.source_id,
+                "text_snippet": cit.text_snippet,
+                "start_char": cit.start_char,
+                "end_char": cit.end_char,
+            }
+            for cit in normalized_citations
+        ]
+        scrubbed_cache_payload = scrub_dict({
+            "answer": full_text,
+            "citations": serialized_citations,
+        })
+        self.journal.put_query_cache(
+            cache_key=request_key,
+            notebook_id=nb_id,
+            query_text=question,
+            response_payload=json.dumps(scrubbed_cache_payload),
+        )
+
         # Transition: CONFIRMED
         self.journal.transition(request_key, MutationState.CONFIRMED)
 
         return {
             "ok": True,
             "answer": full_text,
-            "citations": [
-                {
-                    "source_id": cit.source_id,
-                    "text_snippet": cit.text_snippet,
-                    "start_char": cit.start_char,
-                    "end_char": cit.end_char,
-                }
-                for cit in normalized_citations
-            ],
+            "citations": serialized_citations,
         }
 
     async def _handle_add_source(self, command: dict[str, Any]) -> dict[str, Any]:

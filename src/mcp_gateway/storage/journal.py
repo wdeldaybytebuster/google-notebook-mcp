@@ -132,6 +132,21 @@ class MutationJournal:
                 with self._conn:
                     self._conn.execute("PRAGMA user_version = 2;")
 
+        if current_version < 3:
+            with self._conn:
+                self._conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS query_cache (
+                        cache_key TEXT PRIMARY KEY,
+                        notebook_id TEXT NOT NULL,
+                        query_text TEXT NOT NULL,
+                        response_payload TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    PRAGMA user_version = 3;
+                    """
+                )
+
     def close(self) -> None:
         self._conn.close()
 
@@ -340,3 +355,47 @@ class MutationJournal:
             assigned_source_id=assigned_source_id,
             detail=detail or f"Reconciled to {target_state.value}",
         )
+
+    def put_query_cache(
+        self,
+        cache_key: str,
+        notebook_id: str,
+        query_text: str,
+        response_payload: str,
+    ) -> None:
+        """Stores or updates a confirmed query_notebook response in the dedicated query_cache table."""
+        def _do_put() -> None:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO query_cache (
+                        cache_key, notebook_id, query_text, response_payload
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(cache_key) DO UPDATE SET
+                        notebook_id = excluded.notebook_id,
+                        query_text = excluded.query_text,
+                        response_payload = excluded.response_payload,
+                        created_at = CURRENT_TIMESTAMP
+                    """,
+                    (cache_key, notebook_id, query_text, response_payload),
+                )
+
+        self._execute_with_busy_retry(_do_put)
+
+    def get_query_cache(self, cache_key: str) -> dict[str, Any] | None:
+        """Retrieves a cached query_notebook payload by cache_key, or None if absent."""
+        cursor = self._conn.execute(
+            "SELECT cache_key, notebook_id, query_text, response_payload, created_at "
+            "FROM query_cache WHERE cache_key = ?",
+            (cache_key,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "cache_key": str(row["cache_key"]),
+            "notebook_id": str(row["notebook_id"]),
+            "query_text": str(row["query_text"]),
+            "response_payload": str(row["response_payload"]),
+            "created_at": str(row["created_at"]) if row["created_at"] is not None else "",
+        }
