@@ -80,7 +80,6 @@ from mcp_gateway.schemas.error import (
     PERMISSION_DENIED,
     REQUEST_KEY_CONFLICT,
     RESOURCE_EXHAUSTED,
-    SESSION_LOCKED,
     SESSION_UNLOCKED,
     UPSTREAM_SCHEMA_DRIFT,
     categorize_error,

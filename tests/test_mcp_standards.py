@@ -22,13 +22,6 @@ from mcp.server.lowlevel.server import NotificationOptions
 from mcp.shared.exceptions import MCPError
 
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon, McpFacade
-from mcp_gateway.schemas.error import (
-    ALLOWLIST_DENIED,
-    INVALID_ARGUMENT,
-    NOT_FOUND,
-    PERMISSION_DENIED,
-    SESSION_UNLOCKED,
-)
 from mcp_gateway.schemas.tools import TOOL_ANNOTATIONS
 
 
