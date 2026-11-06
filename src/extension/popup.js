@@ -42,11 +42,15 @@ function parseAndValidateNotebookId(rawInput) {
     return null;
   }
   let candidate = rawInput.trim();
-  if (!candidate || candidate.includes('..') || candidate.includes('\\')) {
+  const lowerCandidate = candidate.toLowerCase();
+  if (
+    !candidate ||
+    candidate.includes('..') ||
+    candidate.includes('\\') ||
+    lowerCandidate.includes('%2e')
+  ) {
     return null;
   }
-
-  const lowerCandidate = candidate.toLowerCase();
   const looksLikeBareDomain =
     lowerCandidate.startsWith('notebook.google.com/notebook/') ||
     lowerCandidate.startsWith('notebooklm.google.com/notebook/');
@@ -397,17 +401,17 @@ async function discoverNotebooks() {
  * Serializes all checked notebooks in notebookCatalog to the v2 structured map
  * and persists to allowlist.json via Native Messaging (`update_allowlist`).
  *
- * @param {boolean} validateUuids
  * @returns {Promise<{ok: boolean, error?: {message?: string}}>}
  */
-async function persistAllowlist(validateUuids = false) {
-  /** @type {Record<string, {title: string, mode: 'READ_ONLY' | 'INTERACTIVE'}>} */
+async function persistAllowlist() {
+  /** @type {Record<string, {title: string, mode: 'READ_ONLY' | 'INTERACTIVE', manual?: boolean}>} */
   const allowedMap = {};
   for (const nb of notebookCatalog.values()) {
     if (nb.allowed) {
       allowedMap[nb.id] = {
         title: nb.title || '',
         mode: normalizeMode(nb.mode),
+        manual: Boolean(nb.manual),
       };
     }
   }
@@ -416,7 +420,6 @@ async function persistAllowlist(validateUuids = false) {
     const res = await chrome.runtime.sendMessage({
       type: 'update_allowlist',
       notebooks: allowedMap,
-      validate_uuids: Boolean(validateUuids),
     });
     return res || { ok: false };
   } catch (err) {
@@ -659,12 +662,19 @@ function initManualNotebookForm() {
       allowed: true,
       mode: selectedMode,
       sourceCount: prev?.sourceCount,
+      manual: true,
     });
 
-    const syncRes = await persistAllowlist(true);
-    if (syncRes && syncRes.ok === false && syncRes.error?.message) {
+    const syncRes = await persistAllowlist();
+    if (syncRes && syncRes.ok === false) {
+      // Rollback notebookCatalog to previous state
+      if (prev) {
+        notebookCatalog.set(validatedId, prev);
+      } else {
+        notebookCatalog.delete(validatedId);
+      }
       if (errorEl) {
-        errorEl.textContent = String(syncRes.error.message);
+        errorEl.textContent = String(syncRes.error?.message || 'Failed to sync notebook with daemon.');
         errorEl.hidden = false;
       }
     } else {

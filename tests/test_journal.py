@@ -285,3 +285,34 @@ async def test_query_notebook_replays_cached_answer_and_citations(tmp_path: Path
         assert replay["citations"] == first["citations"]
         assert mock_send.call_count == 1
     daemon.journal.close()
+
+
+def test_compute_payload_hash_strips_transient_keys(secret: bytes) -> None:
+    args1 = {"notebook_id": "nb-1", "question": "What is AI?", "session_token": "token-a", "timeout_seconds": 60}
+    args2 = {"notebook_id": "nb-1", "question": "What is AI?", "session_token": "token-b", "timeout_seconds": 120}
+    assert compute_payload_hash(args1, secret) == compute_payload_hash(args2, secret)
+
+
+def test_prepare_detects_request_key_conflict_on_mismatched_payload(journal: MutationJournal, secret: bytes) -> None:
+    args1 = {"notebook_id": "nb-1", "question": "Query A"}
+    args2 = {"notebook_id": "nb-1", "question": "Query B"}
+    journal.prepare("req-key-1", "nb-1", OperationType.QUERY_NOTEBOOK, args1, secret)
+
+    with pytest.raises(ValueError, match="Request key conflict"):
+        journal.prepare("req-key-1", "nb-1", OperationType.QUERY_NOTEBOOK, args2, secret)
+
+
+def test_prepare_detects_request_key_conflict_on_mismatched_notebook(journal: MutationJournal, secret: bytes) -> None:
+    args = {"notebook_id": "nb-1", "question": "Query A"}
+    journal.prepare("req-key-2", "nb-1", OperationType.QUERY_NOTEBOOK, args, secret)
+
+    with pytest.raises(ValueError, match="Request key conflict"):
+        journal.prepare("req-key-2", "nb-2", OperationType.QUERY_NOTEBOOK, args, secret)
+
+
+def test_prepare_detects_request_key_conflict_on_mismatched_operation(journal: MutationJournal, secret: bytes) -> None:
+    args = {"notebook_id": "nb-1", "title": "Note Title"}
+    journal.prepare("req-key-3", "nb-1", OperationType.CREATE_NOTE, args, secret)
+
+    with pytest.raises(ValueError, match="Request key conflict"):
+        journal.prepare("req-key-3", "nb-1", OperationType.DELETE_NOTE, args, secret)

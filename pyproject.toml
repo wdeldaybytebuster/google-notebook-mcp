@@ -81,6 +81,7 @@ explicit_package_bases = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "--cov=src/mcp_gateway --cov-report=term-missing"
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 120

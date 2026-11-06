@@ -141,7 +141,8 @@ class _NamedPipeTransport(asyncio.Transport):
         if self._closing or not data:
             return
         try:
-            self._win32file.WriteFile(self._pipe_handle, bytes(data))
+            overlapped = self._win32file.OVERLAPPED()
+            self._win32file.WriteFile(self._pipe_handle, bytes(data), overlapped)
         except Exception as exc:
             self._closing = True
             self._loop.call_soon(self._protocol.connection_lost, exc)
@@ -170,6 +171,7 @@ class WindowsNamedPipeServer:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server_task: asyncio.Task[None] | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
+        self._active_handles: set[Any] = set()
 
     async def start(self) -> None:
         self._serving = True
@@ -183,6 +185,7 @@ class WindowsNamedPipeServer:
         win32pipe: Any,
     ) -> None:
         """Wraps a connected Win32 pipe handle in asyncio StreamReader/StreamWriter and dispatches to callback."""
+        self._active_handles.add(pipe_handle)
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader, loop=loop)
@@ -193,15 +196,25 @@ class WindowsNamedPipeServer:
         async def _pump_reads() -> None:
             while not transport.is_closing():
                 try:
-                    _hr, chunk = await loop.run_in_executor(
-                        None,
-                        win32file.ReadFile,
-                        pipe_handle,
-                        65536,
-                    )
-                    if not chunk:
-                        break
-                    reader.feed_data(bytes(chunk))
+                    overlapped = win32file.OVERLAPPED()
+                    overlapped.hEvent = win32file.CreateEvent(None, True, False, None)
+                    try:
+                        _hr, chunk = await loop.run_in_executor(
+                            None,
+                            win32file.ReadFile,
+                            pipe_handle,
+                            65536,
+                            overlapped,
+                        )
+                        if not chunk:
+                            break
+                        reader.feed_data(bytes(chunk))
+                    finally:
+                        if getattr(overlapped, "hEvent", None) is not None:
+                            try:
+                                win32file.CloseHandle(overlapped.hEvent)
+                            except Exception:
+                                pass
                 except Exception:
                     break
             reader.feed_eof()
@@ -212,6 +225,7 @@ class WindowsNamedPipeServer:
             if asyncio.iscoroutine(cb_res):
                 await cb_res
         finally:
+            self._active_handles.discard(pipe_handle)
             transport.close()
             if not read_task.done():
                 read_task.cancel()
@@ -291,6 +305,11 @@ class WindowsNamedPipeServer:
                     res = win32pipe.ConnectNamedPipe(pipe_handle, overlapped)
                     if res != 0:
                         await self._wait_event(overlapped.hEvent)
+                except Exception as exc:
+                    # WinError 535: ERROR_PIPE_CONNECTED (client connected between CreateNamedPipe and ConnectNamedPipe)
+                    win_err = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+                    if win_err != 535:
+                        raise
                 finally:
                     if getattr(overlapped, "hEvent", None) is not None:
                         try:
@@ -325,6 +344,18 @@ class WindowsNamedPipeServer:
 
     async def stop(self) -> None:
         self._serving = False
+        if sys.platform == "win32":
+            try:
+                import importlib
+                win32file: Any = importlib.import_module("win32file")
+                for handle in list(self._active_handles):
+                    try:
+                        win32file.CancelIo(handle)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        self._active_handles.clear()
         for task in list(self._client_tasks):
             task.cancel()
         self._client_tasks.clear()

@@ -62,9 +62,20 @@ class MutationRecord:
     updated_at: str
 
 
+TRANSIENT_PAYLOAD_KEYS: frozenset[str] = frozenset({
+    "session_token",
+    "timeout_seconds",
+    "request_key",
+    "idempotency_key",
+    "_meta",
+    "traceparent",
+})
+
+
 def compute_payload_hash(args: dict[str, Any], capability_secret: bytes) -> str:
-    """Computes a deterministic HMAC-SHA256 digest of canonicalized JSON arguments."""
-    canonical = json.dumps(args, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    """Computes a deterministic HMAC-SHA256 digest of canonicalized JSON arguments with transient keys stripped."""
+    clean_args = {k: v for k, v in args.items() if k not in TRANSIENT_PAYLOAD_KEYS}
+    canonical = json.dumps(clean_args, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hmac.new(capability_secret, canonical, hashlib.sha256).hexdigest()
 
 
@@ -201,6 +212,20 @@ class MutationJournal:
                 existing = cursor.fetchone()
                 if existing is not None:
                     record = self._row_to_record(existing)
+                    if record.notebook_id != notebook_id:
+                        raise ValueError(
+                            f"Request key conflict for {request_key!r}: notebook_id mismatch "
+                            f"({record.notebook_id!r} != {notebook_id!r})."
+                        )
+                    if record.operation_type != operation_type:
+                        raise ValueError(
+                            f"Request key conflict for {request_key!r}: operation_type mismatch "
+                            f"({record.operation_type.value!r} != {operation_type.value!r})."
+                        )
+                    if record.payload_hash != payload_hash:
+                        raise ValueError(
+                            f"Request key conflict for {request_key!r}: payload_hash mismatch."
+                        )
                     if record.state == MutationState.REJECTED:
                         raise ValueError(
                             f"Mutation with request_key {request_key!r} was previously rejected."

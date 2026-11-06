@@ -164,6 +164,10 @@ def test_setup_native_host_cli_script_writes_manifest(tmp_path: Path, monkeypatc
     import setup_native_host
 
     monkeypatch.setattr(
+        "mcp_gateway.host.installer.get_target_manifest_directories",
+        lambda **_kwargs: [tmp_path],
+    )
+    monkeypatch.setattr(
         "mcp_gateway.host.installer.get_manifest_dir",
         lambda **_kwargs: tmp_path,
     )
@@ -174,6 +178,22 @@ def test_setup_native_host_cli_script_writes_manifest(tmp_path: Path, monkeypatc
     assert manifest_file.exists()
     content = json.loads(manifest_file.read_text(encoding="utf-8"))
     assert f"chrome-extension://{ext_id}/" in content["allowed_origins"]
+
+
+def test_setup_native_host_cli_defaults_to_all_browsers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from typing import Any
+    import setup_native_host
+
+    installed_targets: list[str | None] = []
+
+    def mock_install_manifest(**kwargs: Any) -> list[Path]:
+        installed_targets.append(kwargs.get("browser"))
+        return [tmp_path / "mock_manifest.json"]
+
+    monkeypatch.setattr(setup_native_host, "install_manifest", mock_install_manifest)
+    exit_code = setup_native_host.main(["--extension-id", "abcdefghijklmnopqrstuvwxyzabcdef"])
+    assert exit_code == 0
+    assert installed_targets == [None]
 
 
 

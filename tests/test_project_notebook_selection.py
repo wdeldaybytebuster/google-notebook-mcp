@@ -41,6 +41,15 @@ def test_project_config_read_write(tmp_path: Path) -> None:
     assert "updated_at" in cfg
 
 
+def test_save_project_notebook_config_permissions_and_atomicity(tmp_path: Path) -> None:
+    from mcp_gateway.broker.project_config import save_project_notebook_config
+
+    saved = save_project_notebook_config("00000000-0000-0000-0000-000000000001", "Test Project", project_dir=tmp_path)
+    assert saved is not None
+    assert saved.exists()
+    assert (saved.stat().st_mode & 0o777) == 0o600
+
+
 def test_select_notebook_schema_validation() -> None:
     """Verifies SELECT_NOTEBOOK_SCHEMA and SelectNotebookInput with save_for_project."""
     valid_args: dict[str, Any] = {"notebook_id": "nb-123", "save_for_project": True}

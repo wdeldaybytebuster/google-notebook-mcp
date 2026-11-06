@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -39,16 +40,23 @@ def save_project_notebook_config(
     title: str = "",
     project_dir: Path | str | None = None,
 ) -> Path | None:
-    """Saves notebook preference to .notebook_mcp.json in the project directory."""
+    """Saves notebook preference to .notebook_mcp.json in the project directory with atomic write and 0o600 permissions."""
     try:
         target_dir = Path(project_dir) if project_dir else Path.cwd()
+        target_dir.mkdir(parents=True, exist_ok=True)
         config_file = target_dir / PROJECT_CONFIG_FILENAME
+        tmp_file = target_dir / f".{PROJECT_CONFIG_FILENAME}.{os.getpid()}.{time.time_ns()}.tmp"
         payload = {
             "notebook_id": notebook_id,
             "title": title,
             "updated_at": time.time(),
         }
-        config_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        content = json.dumps(payload, indent=2) + "\n"
+        fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.chmod(str(tmp_file), 0o600)
+        os.replace(str(tmp_file), str(config_file))
         return config_file
     except OSError as exc:
         logger.warning("Could not write project config .notebook_mcp.json: %s", exc)

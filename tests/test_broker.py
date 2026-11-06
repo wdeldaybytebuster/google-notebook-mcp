@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+import struct
 from typing import Any, cast
 import pytest
 
@@ -586,3 +588,209 @@ async def test_broker_live_allowlist_reload_with_mutex_and_uuid_validation(
     })
     assert fwd_res["ok"] is False
     assert fwd_res["error"]["code"] == AUTH_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_companion_frame_drain_serialization(allowlist_file: Path) -> None:
+    """Ensures hello_ack and HEARTBEAT_PONG socket writes are mutex-protected against race conditions."""
+    config = BrokerConfig(allowlist_path=allowlist_file)
+    broker = BrokerDaemon(config)
+
+    drain_locked_states: list[bool] = []
+
+    class MockWriter:
+        def __init__(self) -> None:
+            self.written_bytes = bytearray()
+
+        def write(self, data: bytes) -> None:
+            self.written_bytes.extend(data)
+
+        async def drain(self) -> None:
+            drain_locked_states.append(broker._companion_ipc_mutex.locked())
+
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    writer = MockWriter()
+
+    # Test hello handshake
+    hello_payload = json.dumps({"type": "hello"}).encode("utf-8")
+    hello_frame = struct.pack(">I", len(hello_payload)) + hello_payload
+
+    # Test ping frame
+    ping_payload = json.dumps({"type": "HEARTBEAT_PING", "requestId": "req-999"}).encode("utf-8")
+    ping_frame = struct.pack(">I", len(ping_payload)) + ping_payload
+
+    mock_reader = asyncio.StreamReader()
+    mock_reader.feed_data(hello_frame + ping_frame)
+    mock_reader.feed_eof()
+
+    await broker.handle_ipc_connection(mock_reader, cast(Any, writer))
+
+    assert len(drain_locked_states) == 2
+    assert drain_locked_states == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_handle_query_notebook_confirmed_replay_cache_validation(broker: BrokerDaemon) -> None:
+    """Ensures confirmed query replay strictly verifies cached entry and rejects corrupted cache without stubs."""
+    from mcp_gateway.schemas.error import REQUEST_KEY_CONFLICT
+    from mcp_gateway.storage.journal import MutationState, OperationType
+
+    sel = await broker.dispatch({"action": "select_notebook", "notebook_id": "nb-allowed-1"})
+    assert sel["ok"] is True
+
+    req_key = "req-query-cache-test-1"
+
+    # 1. Prepare and confirm mutation in journal
+    broker.journal.prepare(
+        request_key=req_key,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.QUERY_NOTEBOOK,
+        args={"action": "query_notebook", "notebook_id": "nb-allowed-1", "question": "What is AI?", "request_key": req_key},
+        capability_secret=broker.config.capability_secret,
+    )
+    broker.journal.transition(req_key, MutationState.SENT)
+    broker.journal.transition(req_key, MutationState.CONFIRMED)
+
+    # 2. Replay with missing query_cache returns REQUEST_KEY_CONFLICT, NOT {citations: []}
+    res_missing = await broker.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-allowed-1",
+        "question": "What is AI?",
+        "request_key": req_key,
+    })
+    assert res_missing["ok"] is False
+    assert res_missing["error"]["code"] == REQUEST_KEY_CONFLICT
+    assert "cache entry is missing or mismatched" in res_missing["error"]["message"]
+
+    # 3. Save matching cache entry
+    broker.journal.put_query_cache(
+        cache_key=req_key,
+        notebook_id="nb-allowed-1",
+        query_text="What is AI?",
+        response_payload=json.dumps({"answer": "AI is artificial intelligence.", "citations": ["doc-1"]}),
+    )
+
+    # Replay with matching key & args succeeds from cache
+    res_cached = await broker.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-allowed-1",
+        "question": "What is AI?",
+        "request_key": req_key,
+    })
+    assert res_cached["ok"] is True
+    assert res_cached["cached"] is True
+    assert res_cached["answer"] == "AI is artificial intelligence."
+    assert res_cached["citations"] == ["doc-1"]
+
+    # 4. Replay with conflicting question returns REQUEST_KEY_CONFLICT
+    res_conflict = await broker.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-allowed-1",
+        "question": "What is Machine Learning?",
+        "request_key": req_key,
+    })
+    assert res_conflict["ok"] is False
+    assert res_conflict["error"]["code"] == REQUEST_KEY_CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_mutation_handlers_detect_conflicting_parameters(broker: BrokerDaemon) -> None:
+    """Verifies add_source, create_note, delete_note reject reused idempotency keys with different arguments."""
+    from mcp_gateway.schemas.error import REQUEST_KEY_CONFLICT
+    from mcp_gateway.storage.journal import OperationType
+
+    sel = await broker.dispatch({"action": "select_notebook", "notebook_id": "nb-allowed-1"})
+    assert sel["ok"] is True
+
+    # Conflicting add_source
+    k1 = "idem-src-1"
+    broker.journal.prepare(
+        request_key=k1,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.ADD_SOURCE,
+        args={"action": "add_source", "notebook_id": "nb-allowed-1", "idempotency_key": k1, "source": {"type": "text", "title": "A", "content": "1"}},
+        capability_secret=broker.config.capability_secret,
+    )
+    # Attempt same key on different notebook via direct handler
+    res_nb_diff = await broker._handle_add_source({
+        "notebook_id": "nb-allowed-2",
+        "idempotency_key": k1,
+        "source": {"type": "text", "title": "A", "content": "1"},
+    })
+    assert res_nb_diff["ok"] is False
+    assert res_nb_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+    # Attempt same key with conflicting payload via dispatch
+    res_payload_diff = await broker.dispatch({
+        "action": "add_source",
+        "notebook_id": "nb-allowed-1",
+        "idempotency_key": k1,
+        "source": {"type": "text", "title": "A", "content": "DIFFERENT"},
+    })
+    assert res_payload_diff["ok"] is False
+    assert res_payload_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+    # Conflicting create_note
+    k2 = "idem-note-1"
+    broker.journal.prepare(
+        request_key=k2,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.CREATE_NOTE,
+        args={"action": "create_note", "notebook_id": "nb-allowed-1", "idempotency_key": k2, "title": "T1", "content": "C1"},
+        capability_secret=broker.config.capability_secret,
+    )
+    res_note_diff = await broker.dispatch({
+        "action": "create_note",
+        "notebook_id": "nb-allowed-1",
+        "idempotency_key": k2,
+        "title": "T2",
+        "content": "C2",
+    })
+    assert res_note_diff["ok"] is False
+    assert res_note_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+    # Conflicting delete_note
+    k3 = "idem-del-1"
+    broker.journal.prepare(
+        request_key=k3,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.DELETE_NOTE,
+        args={"action": "delete_note", "notebook_id": "nb-allowed-1", "idempotency_key": k3, "note_id": "note-1"},
+        capability_secret=broker.config.capability_secret,
+    )
+    res_del_diff = await broker.dispatch({
+        "action": "delete_note",
+        "notebook_id": "nb-allowed-1",
+        "idempotency_key": k3,
+        "note_id": "note-2",
+    })
+    assert res_del_diff["ok"] is False
+    assert res_del_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_update_allowlist_preserves_legacy_ids_unless_manual(broker: BrokerDaemon) -> None:
+    # 1. Update allowlist with legacy non-UUID notebook ID (without manual: true) passes
+    res_legacy = await broker.dispatch({
+        "action": "update_allowlist",
+        "notebooks": {
+            "legacy-nb-custom-1": {"title": "Legacy Notebook", "mode": "READ_ONLY"},
+        },
+    })
+    assert res_legacy["ok"] is True
+    assert "legacy-nb-custom-1" in broker.allowlist_config.notebook_permissions
+
+    # 2. Update allowlist with legacy non-UUID notebook ID with manual: true fails
+    res_manual_bad = await broker.dispatch({
+        "action": "update_allowlist",
+        "notebooks": {
+            "legacy-nb-custom-2": {"title": "Manual Non-UUID", "mode": "READ_ONLY", "manual": True},
+        },
+    })
+    assert res_manual_bad["ok"] is False
+    assert res_manual_bad["error"]["code"] == "INVALID_ARGUMENT"

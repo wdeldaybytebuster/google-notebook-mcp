@@ -247,6 +247,8 @@ def test_popup_js_runtime_setup_mode_checklist_and_uuid_sanitization_in_node() -
       const validUrl1 = fn('https://notebook.google.com/notebook/123e4567-e89b-12d3-a456-426614174000?authuser=0');
       const validUrl2 = fn('https://notebooklm.google.com/notebook/123E4567-E89B-12D3-A456-426614174000/');
       const badTraversal = fn('../../etc/passwd');
+      const badPercentTraversal = fn('%2e%2e/etc/passwd');
+      const badEncodedUrl = fn('https://notebook.google.com/notebook/%2e%2e%2f12345');
       const badHost = fn('https://evil.example.com/notebook/123e4567-e89b-12d3-a456-426614174000');
       const badUuid = fn('not-a-uuid');
 
@@ -269,7 +271,7 @@ def test_popup_js_runtime_setup_mode_checklist_and_uuid_sanitization_in_node() -
         elementsById['manual-notebook-error'].textContent.length > 0;
       const afterBadCount = sentMessages.filter((m) => m.type === 'update_allowlist').length;
 
-      // 4. Submit valid manual NotebookLM URL with INTERACTIVE mode -> calls update_allowlist with validate_uuids=true
+      // 4. Submit valid manual NotebookLM URL with INTERACTIVE mode -> calls update_allowlist with manual: true
       elementsById['manual-notebook-input'].value = 'https://notebook.google.com/notebook/33333333-3333-4333-8333-333333333333';
       elementsById['manual-notebook-title'].value = 'Manual Legacy NB';
       elementsById['manual-notebook-mode'].value = 'INTERACTIVE';
@@ -286,6 +288,8 @@ def test_popup_js_runtime_setup_mode_checklist_and_uuid_sanitization_in_node() -
         validUrl1,
         validUrl2,
         badTraversal,
+        badPercentTraversal,
+        badEncodedUrl,
         badHost,
         badUuid,
         setupVisibleOnDisconnect,
@@ -294,7 +298,6 @@ def test_popup_js_runtime_setup_mode_checklist_and_uuid_sanitization_in_node() -
         afterBadCount,
         errorShownOnBadInput,
         errorHiddenAfterValid,
-        lastUpdateValidateUuids: lastUpdate?.validate_uuids,
         manualAddedEntry: lastUpdate?.notebooks?.['33333333-3333-4333-8333-333333333333'],
         renderedCardsCount: elementsById['notebook-list'].children.filter((c) => c.id !== 'notebook-list-empty').length,
       }}));
@@ -309,6 +312,8 @@ def test_popup_js_runtime_setup_mode_checklist_and_uuid_sanitization_in_node() -
     assert out["validUrl1"] == expected_uuid
     assert out["validUrl2"] == expected_uuid
     assert out["badTraversal"] is None
+    assert out["badPercentTraversal"] is None
+    assert out["badEncodedUrl"] is None
     assert out["badHost"] is None
     assert out["badUuid"] is None
     assert out["setupVisibleOnDisconnect"] is True
@@ -316,6 +321,96 @@ def test_popup_js_runtime_setup_mode_checklist_and_uuid_sanitization_in_node() -
     assert out["errorShownOnBadInput"] is True
     assert out["beforeBadCount"] == out["afterBadCount"]
     assert out["errorHiddenAfterValid"] is True
-    assert out["lastUpdateValidateUuids"] is True
-    assert out["manualAddedEntry"] == {"title": "Manual Legacy NB", "mode": "INTERACTIVE"}
+    assert out["manualAddedEntry"] == {"title": "Manual Legacy NB", "mode": "INTERACTIVE", "manual": True}
     assert out["renderedCardsCount"] >= 2
+
+
+def test_parse_and_validate_notebook_id_rejects_url_encoded_traversal() -> None:
+    script = f"""
+    const fs = require('fs');
+    const code = fs.readFileSync({json.dumps(str(POPUP_JS_PATH))}, 'utf8');
+    const ALLOWED_NOTEBOOK_URL_PREFIXES = [
+      'https://notebook.google.com/notebook/',
+      'https://notebooklm.google.com/notebook/',
+      'http://notebook.google.com/notebook/',
+      'http://notebooklm.google.com/notebook/',
+    ];
+    const UUID_V4_REGEX = /^[a-f0-9]{{8}}-[a-f0-9]{{4}}-[a-f0-9]{{4}}-[a-f0-9]{{4}}-[a-f0-9]{{12}}$/;
+    const fnMatch = code.match(/function parseAndValidateNotebookId\\([\\s\\S]*?\\)\\s*\\{{[\\s\\S]*?\\n\\}}/);
+    if (!fnMatch) throw new Error('parseAndValidateNotebookId not found');
+    eval(fnMatch[0]);
+
+    console.log(JSON.stringify({{
+        percentDot: parseAndValidateNotebookId('%2e%2e/etc/passwd'),
+        doubleDotEncoded: parseAndValidateNotebookId('https://notebook.google.com/notebook/%2e%2e%2f12345'),
+        validUuid: parseAndValidateNotebookId('11111111-2222-3333-4444-555555555555')
+    }}));
+    """
+    out = _run_node_script(script)
+    assert out["percentDot"] is None
+    assert out["doubleDotEncoded"] is None
+    assert out["validUuid"] == "11111111-2222-3333-4444-555555555555"
+
+
+def test_popup_manual_entry_rollback_on_sync_failure() -> None:
+    script = f"""
+    const fs = require('fs');
+    const code = fs.readFileSync({json.dumps(str(POPUP_JS_PATH))}, 'utf8');
+
+    globalThis.chrome = {{
+      runtime: {{
+        sendMessage: async (msg) => ({{
+          ok: false,
+          error: {{ message: 'Simulated backend sync failure' }},
+        }}),
+      }},
+    }};
+
+    const notebookCatalog = new Map();
+    const normMatch = code.match(/function normalizeMode\\([\\s\\S]*?\\)\\s*\\{{[\\s\\S]*?\\n\\}}/);
+    const persistMatch = code.match(/async function persistAllowlist\\([\\s\\S]*?\\)\\s*\\{{[\\s\\S]*?\\n\\}}/);
+    eval(normMatch[0]);
+    eval(persistMatch[0]);
+
+    (async () => {{
+      const validId = '44444444-4444-4444-8444-444444444444';
+      const initialHas = notebookCatalog.has(validId);
+
+      const prev = notebookCatalog.get(validId);
+      notebookCatalog.set(validId, {{
+        id: validId,
+        title: 'Failing Entry',
+        allowed: true,
+        mode: 'READ_ONLY',
+        manual: true,
+      }});
+
+      const syncRes = await persistAllowlist();
+      let errorMsg = '';
+      if (syncRes && syncRes.ok === false) {{
+        if (prev) {{
+          notebookCatalog.set(validId, prev);
+        }} else {{
+          notebookCatalog.delete(validId);
+        }}
+        errorMsg = String(syncRes.error?.message || 'Failed');
+      }}
+
+      const rolledBackHas = notebookCatalog.has(validId);
+
+      console.log(JSON.stringify({{
+        initialHas,
+        rolledBackHas,
+        errorMsg,
+        syncOk: syncRes.ok,
+      }}));
+    }})().catch((err) => {{
+      console.error(err);
+      process.exit(1);
+    }});
+    """
+    out = _run_node_script(script)
+    assert out["initialHas"] is False
+    assert out["rolledBackHas"] is False
+    assert out["syncOk"] is False
+    assert out["errorMsg"] == "Simulated backend sync failure"

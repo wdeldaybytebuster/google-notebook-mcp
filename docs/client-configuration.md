@@ -11,9 +11,9 @@ The Google Notebook MCP operates on a 5-tier zero-raw-cookie bridge:
 [Client (AI Agent)] 
        │ (stdio JSON-RPC)
 [Tier 2: MCP Facade (`cli.py mcp`)]
-       │ (Local IPC: $XDG_RUNTIME_DIR/broker.sock or Windows Named Pipe, >I)
+       │ (Local IPC: $XDG_RUNTIME_DIR/notebooklm-mcp/broker.sock or Windows Named Pipe, >I)
 [Tier 2: Broker Daemon (`cli.py serve`)]
-       │ (Local IPC: $XDG_RUNTIME_DIR/broker.sock or Windows Named Pipe, >I)
+       │ (Local IPC: $XDG_RUNTIME_DIR/notebooklm-mcp/broker.sock or Windows Named Pipe, >I)
 [Tier 3: Native Messaging Host (`native_host.py`)]
        │ (Chrome stdio framing: @I, chunked 512 KiB)
 [Tier 4: Browser Companion Extension (MV3)]
@@ -199,8 +199,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/Google Notebook MCP
-ExecStart=%h/Projects/Google Notebook MCP/.venv/bin/python3 -m mcp_gateway.cli serve
+WorkingDirectory="%h/Projects/Google Notebook MCP"
+ExecStart="%h/Projects/Google Notebook MCP/.venv/bin/python3" -m mcp_gateway.cli serve
 Restart=always
 RestartSec=5
 Environment=UV_THREADPOOL_SIZE=3
@@ -222,7 +222,12 @@ systemctl --user enable --now gemini-notebook-mcp.service
 
 1. **Verify Broker Listening**:
    ```bash
+   # If XDG_RUNTIME_DIR is set:
    ls -la "${XDG_RUNTIME_DIR:-$HOME/.config/notebooklm-mcp-bridge}/notebooklm-mcp/broker.sock"
+   # Fallback if XDG_RUNTIME_DIR is unset:
+   ls -la "$HOME/.config/notebooklm-mcp-bridge/broker.sock"
+   # Or query gateway directly:
+   python3 -c "from mcp_gateway.transport.paths import get_default_ipc_path; print(get_default_ipc_path())"
    # Must show srw------- (permissions 0o600) inside a 0o700 directory
    ```
 2. **Verify Native Host Manifest**:

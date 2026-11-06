@@ -30,8 +30,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--browser",
-        default="google-chrome",
-        help="Target browser family (default: google-chrome).",
+        default=None,
+        help="Target browser family (default: install across all detected browsers).",
     )
     args = parser.parse_args(argv)
 
@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest_paths = install_manifest(
             host_path=native_host_script,
             extension_id=ext_id,
-            browser=str(args.browser),
+            browser=args.browser,
         )
         for manifest_path in manifest_paths:
             print(f"[+] Native Messaging Host registered at: {manifest_path}")

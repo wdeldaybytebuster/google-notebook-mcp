@@ -99,6 +99,7 @@ from mcp_gateway.storage.journal import (
     MutationJournal,
     MutationState,
     OperationType,
+    compute_payload_hash,
 )
 from mcp_gateway.transport import (
     BaseIpcServer,
@@ -334,8 +335,9 @@ class BrokerDaemon:
                         "extension_id": os.environ.get("ALLOWED_EXTENSION_ID", ""),
                     }
                     ack_bytes = json.dumps(ack).encode("utf-8")
-                    writer.write(struct.pack(IPC_FRAME_FORMAT, len(ack_bytes)) + ack_bytes)
-                    await writer.drain()
+                    async with self._companion_ipc_mutex:
+                        writer.write(struct.pack(IPC_FRAME_FORMAT, len(ack_bytes)) + ack_bytes)
+                        await writer.drain()
                     continue
 
                 # Response frame handling for pending companion requests
@@ -356,8 +358,9 @@ class BrokerDaemon:
                         "timestamp": time.time(),
                     }
                     pong_bytes = json.dumps(pong_reply).encode("utf-8")
-                    writer.write(struct.pack(IPC_FRAME_FORMAT, len(pong_bytes)) + pong_bytes)
-                    await writer.drain()
+                    async with self._companion_ipc_mutex:
+                        writer.write(struct.pack(IPC_FRAME_FORMAT, len(pong_bytes)) + pong_bytes)
+                        await writer.drain()
                     continue
 
                 # Unsolicited pong frame handling
@@ -798,7 +801,7 @@ class BrokerDaemon:
             if isinstance(raw_notebooks, dict):
                 for raw_id, meta in raw_notebooks.items():
                     meta_dict = meta if isinstance(meta, dict) else {}
-                    must_validate = validate_uuids or bool(meta_dict.get("manual", False))
+                    must_validate = bool(meta_dict.get("manual", False))
                     if must_validate:
                         try:
                             clean_id = parse_and_validate_notebook_id(str(raw_id))
@@ -1177,6 +1180,18 @@ class BrokerDaemon:
 
         existing = self.journal.get(request_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.QUERY_NOTEBOOK
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {request_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -1186,7 +1201,11 @@ class BrokerDaemon:
                 ).to_dict()
             elif existing.state == MutationState.CONFIRMED:
                 cached_entry = self.journal.get_query_cache(request_key)
-                if cached_entry is not None:
+                if (
+                    cached_entry is not None
+                    and cached_entry.get("notebook_id") == nb_id
+                    and cached_entry.get("query_text") == question
+                ):
                     try:
                         parsed = json.loads(cached_entry["response_payload"])
                         if isinstance(parsed, dict):
@@ -1198,12 +1217,12 @@ class BrokerDaemon:
                             }
                     except Exception:
                         pass
-                return {
-                    "ok": True,
-                    "answer": "Cached result for confirmed query.",
-                    "citations": [],
-                    "cached": True,
-                }
+                # Never return synthetic ungrounded stub citations: []
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Confirmed mutation {request_key!r} cache entry is missing or mismatched.",
+                    retryable=False,
+                ).to_dict()
             elif existing.state == MutationState.REJECTED:
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -1375,6 +1394,18 @@ class BrokerDaemon:
 
         existing = self.journal.get(idempotency_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.ADD_SOURCE
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {idempotency_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -1590,6 +1621,19 @@ class BrokerDaemon:
 
         existing = self.journal.get(idempotency_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.CREATE_NOTE
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {idempotency_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                    mcp_correlation_id=idempotency_key,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -1781,6 +1825,19 @@ class BrokerDaemon:
 
         existing = self.journal.get(idempotency_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.DELETE_NOTE
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {idempotency_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                    mcp_correlation_id=idempotency_key,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,

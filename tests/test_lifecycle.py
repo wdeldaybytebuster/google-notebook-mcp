@@ -69,7 +69,7 @@ def test_early_c_level_stderr_redirection_fallback(tmp_path: Path) -> None:
 
 
 def test_windows_binary_stdio_mode() -> None:
-    """On Windows, stdio is pinned to binary mode via msvcrt.setmode."""
+    """On Windows, stdio is pinned to binary mode via msvcrt.setmode and exits cleanly."""
     from mcp_gateway.host.native_host import main
 
     mock_msvcrt = MagicMock()
@@ -84,6 +84,7 @@ def test_windows_binary_stdio_mode() -> None:
                 with patch("mcp_gateway.host.native_host.relay_loop", return_value=None):
                     with patch("mcp_gateway.host.native_host.asyncio.run"):
                         with patch("mcp_gateway.host.native_host.setup_stderr_redirection"):
+                            # This MUST NOT raise SystemExit or invoke os._exit(0)
                             main()
                         assert mock_msvcrt.setmode.call_count == 2
                         calls = mock_msvcrt.setmode.call_args_list
@@ -103,14 +104,16 @@ SERVICE_WORKER_PATH = REPO_ROOT / "src" / "extension" / "service_worker.js"
 
 
 def _run_node_script(script: str) -> dict[str, Any]:
-    """Executes a Node.js snippet and returns parsed JSON output."""
+    """Executes a Node.js snippet and returns parsed JSON output, stripping NODE_COMPILE_CACHE."""
     cmd = ["node", "-e", script]
+    clean_env = {k: v for k, v in os.environ.items() if k != "NODE_COMPILE_CACHE"}
     result = subprocess.run(
         cmd,
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
         check=True,
+        env=clean_env,
     )
     return cast(dict[str, Any], json.loads(result.stdout.strip()))
 

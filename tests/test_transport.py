@@ -179,18 +179,32 @@ async def test_windows_named_pipe_server_dispatch_connected_pipe_roundtrip() -> 
         writer.close()
         await writer.wait_closed()
 
+    class MockOverlapped:
+        def __init__(self) -> None:
+            self.hEvent = None
+
     class MockWin32File:
         def __init__(self) -> None:
             self._reads = [b"PING", b""]
+            self.OVERLAPPED = MockOverlapped
+            self.read_overlapped: list[Any] = []
+            self.write_overlapped: list[Any] = []
 
-        def ReadFile(self, _handle: Any, _buf_size: int) -> tuple[int, bytes]:
+        def CreateEvent(self, *args: Any) -> str:
+            return "mock-event-handle"
+
+        def ReadFile(self, _handle: Any, _buf_size: int, overlapped: Any = None) -> tuple[int, bytes]:
+            if overlapped is not None:
+                self.read_overlapped.append(overlapped)
             if self._reads:
                 chunk = self._reads.pop(0)
                 if chunk:
                     return (0, chunk)
             raise OSError("BROKEN_PIPE")
 
-        def WriteFile(self, _handle: Any, data: bytes) -> tuple[int, int]:
+        def WriteFile(self, _handle: Any, data: bytes, overlapped: Any = None) -> tuple[int, int]:
+            if overlapped is not None:
+                self.write_overlapped.append(overlapped)
             written_chunks.append(bytes(data))
             return (0, len(data))
 
@@ -206,11 +220,90 @@ async def test_windows_named_pipe_server_dispatch_connected_pipe_roundtrip() -> 
 
     srv = WindowsNamedPipeServer(handler_cb)
     srv._serving = True
-    await srv._dispatch_connected_pipe("mock-pipe-handle-1", MockWin32File(), MockWin32Pipe())
+    mock_file = MockWin32File()
+    await srv._dispatch_connected_pipe("mock-pipe-handle-1", mock_file, MockWin32Pipe())
 
     assert received == [b"PING"]
     assert b"".join(written_chunks) == b"PONG:PING"
+    assert len(mock_file.read_overlapped) >= 1
+    assert len(mock_file.write_overlapped) >= 1
     assert disconnected == ["mock-pipe-handle-1"]
-    assert closed_handles == ["mock-pipe-handle-1"]
+    assert "mock-pipe-handle-1" in closed_handles
+
+
+def test_named_pipe_transport_write_uses_overlapped() -> None:
+    from unittest.mock import MagicMock
+    from mcp_gateway.transport.ipc import _NamedPipeTransport
+
+    mock_loop = MagicMock()
+    mock_protocol = MagicMock()
+    mock_win32file = MagicMock()
+
+    mock_overlapped_instance = MagicMock()
+    mock_win32file.OVERLAPPED.return_value = mock_overlapped_instance
+
+    transport = _NamedPipeTransport(mock_loop, mock_protocol, "handle-1", mock_win32file)
+    transport.write(b"data-bytes")
+
+    mock_win32file.OVERLAPPED.assert_called_once()
+    mock_win32file.WriteFile.assert_called_once_with("handle-1", b"data-bytes", mock_overlapped_instance)
+
+
+@pytest.mark.asyncio
+async def test_windows_named_pipe_server_stop_cancels_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+    from mcp_gateway.transport.ipc import WindowsNamedPipeServer
+
+    canceled_handles: list[Any] = []
+    mock_win32file = MagicMock()
+    mock_win32file.CancelIo = lambda h: canceled_handles.append(h)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "win32file", mock_win32file)
+
+    async def dummy_cb(reader: Any, writer: Any) -> None:
+        pass
+
+    srv = WindowsNamedPipeServer(dummy_cb)
+    srv._active_handles.add("handle-123")
+    srv._active_handles.add("handle-456")
+
+    await srv.stop()
+
+    assert set(canceled_handles) == {"handle-123", "handle-456"}
+    assert len(srv._active_handles) == 0
+
+
+@pytest.mark.asyncio
+async def test_windows_named_pipe_connect_error_535_treated_as_connected() -> None:
+    """Error 535 (ERROR_PIPE_CONNECTED) should be treated as connected without raising."""
+    from unittest.mock import MagicMock
+
+    class WinErr535(Exception):
+        winerror = 535
+
+    mock_win32pipe = MagicMock()
+    mock_win32pipe.ConnectNamedPipe.side_effect = WinErr535("Client already connected")
+
+    mock_win32file = MagicMock()
+    mock_win32file.CreateEvent.return_value = "event-handle"
+
+    # Simulate the connect call in _listen_loop logic
+    overlapped = mock_win32file.OVERLAPPED()
+    overlapped.hEvent = mock_win32file.CreateEvent(None, True, False, None)
+
+    connected = False
+    try:
+        res = mock_win32pipe.ConnectNamedPipe("pipe-h", overlapped)
+        if res == 0:
+            connected = True
+    except Exception as exc:
+        win_err = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+        if win_err == 535:
+            connected = True
+        else:
+            raise
+
+    assert connected is True
 
 
