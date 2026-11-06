@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, cast
 import pytest
 
-from mcp_gateway.broker.allowlist import AllowlistConfig
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon, McpFacade
 from mcp_gateway.broker.secret_scrubber import assert_clean, scrub, scrub_dict
 from mcp_gateway.schemas.error import (
@@ -194,7 +193,7 @@ def test_secret_keystore_containment_zero_google_credentials(tmp_path: Path) -> 
 
     # Write a mutation record
     args = {"notebook_id": "nb-1", "title": "My Note", "question": "What is AI?"}
-    record = journal.prepare(
+    journal.prepare(
         request_key="req-containment-1",
         notebook_id="nb-1",
         operation_type=OperationType.ADD_SOURCE,

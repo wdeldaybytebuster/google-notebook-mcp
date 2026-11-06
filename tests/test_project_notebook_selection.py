@@ -9,17 +9,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mcp_gateway.broker.allowlist import AllowlistConfig
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon
 from mcp_gateway.broker.project_config import (
-    PROJECT_CONFIG_FILENAME,
     get_project_notebook_config,
     save_project_notebook_config,
 )
-from mcp_gateway.broker.session import SessionLock, SessionState
+from mcp_gateway.broker.session import SessionLock
 from mcp_gateway.schemas.error import SESSION_UNLOCKED
 from mcp_gateway.schemas.tools import (
-    SELECT_NOTEBOOK_SCHEMA,
     SelectNotebookInput,
     validate_tool_args,
 )
@@ -42,6 +39,15 @@ def test_project_config_read_write(tmp_path: Path) -> None:
     assert cfg["notebook_id"] == "test-nb-123"
     assert cfg["title"] == "My Project Notebook"
     assert "updated_at" in cfg
+
+
+def test_save_project_notebook_config_permissions_and_atomicity(tmp_path: Path) -> None:
+    from mcp_gateway.broker.project_config import save_project_notebook_config
+
+    saved = save_project_notebook_config("00000000-0000-0000-0000-000000000001", "Test Project", project_dir=tmp_path)
+    assert saved is not None
+    assert saved.exists()
+    assert (saved.stat().st_mode & 0o777) == 0o600
 
 
 def test_select_notebook_schema_validation() -> None:

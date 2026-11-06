@@ -97,7 +97,41 @@
          Main Viewport
          ================================================================ -->
     <main class="main-viewport">
-      <h2 class="section-heading" data-i18n="notebooksHeading">Allowlisted Notebooks</h2>
+      <!-- State-driven Setup Mode Banner (shown when Native Host is disconnected) -->
+      <section
+        id="setup-mode-banner"
+        class="setup-banner"
+        aria-label="Native Host Setup Instructions"
+        hidden
+      >
+        <div class="setup-banner__title">Native Host Setup Required</div>
+        <p class="setup-banner__desc">
+          Run this command in your terminal to link Chrome with the local MCP broker:
+        </p>
+        <code id="setup-command-code" class="setup-banner__code">python3 setup_native_host.py --extension-id ...</code>
+        <div class="setup-banner__actions">
+          <button
+            id="copy-setup-cmd-btn"
+            class="btn btn--secondary btn--sm"
+            type="button"
+          >
+            Copy Command
+          </button>
+        </div>
+      </section>
+
+      <!-- Notebooks Header & Sync -->
+      <div class="section-header-row">
+        <h2 class="section-heading" data-i18n="notebooksHeading">Allowlisted Notebooks</h2>
+        <button
+          id="refresh-notebooks-btn"
+          class="btn btn--secondary btn--sm"
+          type="button"
+          aria-label="Discover and sync notebooks"
+        >
+          Sync
+        </button>
+      </div>
 
       <ul
         id="notebook-list"
@@ -110,6 +144,49 @@
           No notebooks allowlisted yet.
         </li>
       </ul>
+
+      <!-- Manual Notebook ID / URL Fallback Form -->
+      <form id="manual-notebook-form" class="manual-form" novalidate>
+        <div class="manual-form__label">Add Older Notebook by URL or UUID</div>
+        <input
+          id="manual-notebook-input"
+          class="manual-form__input"
+          type="text"
+          placeholder="Paste Notebook URL or UUID…"
+          aria-label="Notebook URL or UUID"
+          required
+        />
+        <div class="manual-form__row">
+          <input
+            id="manual-notebook-title"
+            class="manual-form__input"
+            type="text"
+            placeholder="Title (optional)"
+            aria-label="Notebook title (optional)"
+          />
+          <select
+            id="manual-notebook-mode"
+            class="manual-form__select"
+            aria-label="Notebook permission mode"
+          >
+            <option value="READ_ONLY">Read Only</option>
+            <option value="INTERACTIVE">Interactive</option>
+          </select>
+          <button
+            id="manual-notebook-add-btn"
+            class="btn btn--primary btn--sm"
+            type="submit"
+          >
+            Add
+          </button>
+        </div>
+        <div
+          id="manual-notebook-error"
+          class="manual-form__error"
+          role="alert"
+          hidden
+        ></div>
+      </form>
     </main>
 
     <!-- ================================================================
@@ -129,7 +206,7 @@
       <a
         id="docs-link"
         class="action-bar__docs-link"
-        href="https://github.com/google-notebook-mcp/docs"
+        href="https://github.com/wdeldaybytebuster/google-notebook-mcp"
         target="_blank"
         rel="noopener noreferrer"
         data-i18n="docsLink"

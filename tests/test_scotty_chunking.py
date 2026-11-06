@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 import subprocess
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -34,6 +34,7 @@ SERVICE_WORKER_PATH = REPO_ROOT / "src" / "extension" / "service_worker.js"
 def _run_node_script(script: str) -> dict[str, Any]:
     """Executes a Node.js snippet and returns parsed JSON output."""
     env = dict(os.environ)
+    env.pop("NODE_COMPILE_CACHE", None)
     env["NODE_OPTIONS"] = "--max-old-space-size=1024 --max-semi-space-size=128"
     cmd = ["node", "-e", script]
     result = subprocess.run(
@@ -533,4 +534,151 @@ def test_scotty_chunk_collector_js() -> None:
     assert out["res1SourceId"] == "src-chunk-collector-test"
     # Total uploaded bytes = 100 + 150 = 250 bytes
     assert out["uploadedByteCount"] == 250
+
+
+def test_scotty_routes_via_page_main_and_sw_webui_bridges_js() -> None:
+    """Verify service_worker.js routes scotty_upload/scotty_chunk to page-main.js when
+    chrome.tabs.query & chrome.scripting.executeScript exist (P-03 MAIN-world preflight),
+    and bridges get_status/get_allowlist/discover_notebooks/update_allowlist over nativePort.
+    """
+    script = f"""
+    const fs = require('fs');
+    const code = fs.readFileSync('{SERVICE_WORKER_PATH}', 'utf8');
+
+    let nativeOnMessageListener = null;
+    let nativeOnDisconnectListener = null;
+    let runtimeOnMessageListener = null;
+    const postedToNative = [];
+    const sentToTab = [];
+    const localStore = {{}};
+
+    global.chrome = {{
+      alarms: {{ onAlarm: {{ addListener: () => {{}} }}, create: () => {{}} }},
+      runtime: {{
+        id: 'abcdefghijklmnopabcdefghijklmnop',
+        lastError: null,
+        onStartup: {{ addListener: () => {{}} }},
+        onInstalled: {{ addListener: () => {{}} }},
+        onMessage: {{ addListener: (fn) => {{ runtimeOnMessageListener = fn; }} }},
+        connectNative: () => ({{
+          onMessage: {{ addListener: (fn) => {{ nativeOnMessageListener = fn; }} }},
+          onDisconnect: {{ addListener: (fn) => {{ nativeOnDisconnectListener = fn; }} }},
+          postMessage: (msg) => {{
+            postedToNative.push(msg);
+            // Auto-reply to broker actions sent from SW
+            if (msg && msg.action === 'discover_notebooks') {{
+              setTimeout(() => nativeOnMessageListener({{
+                ok: true,
+                requestId: msg.requestId,
+                notebooks: [{{ id: '11111111-1111-4111-8111-111111111111', title: 'Discovered NB', allowed: false, mode: 'READ_ONLY' }}],
+              }}), 5);
+            }} else if (msg && msg.action === 'get_allowlist') {{
+              setTimeout(() => nativeOnMessageListener({{
+                ok: true,
+                requestId: msg.requestId,
+                notebooks: {{ '11111111-1111-4111-8111-111111111111': {{ title: 'Discovered NB', mode: 'READ_ONLY' }} }},
+              }}), 5);
+            }} else if (msg && msg.action === 'update_allowlist') {{
+              setTimeout(() => nativeOnMessageListener({{
+                ok: true,
+                requestId: msg.requestId,
+                notebooks: msg.notebooks,
+              }}), 5);
+            }}
+          }},
+        }}),
+      }},
+      tabs: {{
+        onUpdated: {{ addListener: () => {{}}, removeListener: () => {{}} }},
+        query: async () => [{{ id: 77, url: 'https://notebook.google.com/notebook/test' }}],
+        update: async () => ({{}}),
+        sendMessage: async (tabId, msg) => {{
+          sentToTab.push({{ tabId, msg }});
+          setTimeout(() => {{
+            runtimeOnMessageListener(
+              {{ type: 'page_result', requestId: msg.requestId, result: {{ ok: true, sourceId: msg.payload?.sourceId, routedViaPageMain: true }} }},
+              {{ tab: {{ id: tabId }} }},
+              () => {{}}
+            );
+          }}, 5);
+        }},
+      }},
+      scripting: {{
+        executeScript: async () => [{{ result: true }}],
+      }},
+      storage: {{
+        local: {{
+          get: async (key) => ({{ [key]: localStore[key] }}),
+          set: async (obj) => {{ Object.assign(localStore, obj); }},
+        }},
+        session: {{
+          get: async () => ({{}}),
+          set: async () => {{}},
+          remove: async () => {{}},
+        }},
+      }},
+    }};
+
+    let swFetchCalled = false;
+    global.fetch = async () => {{
+      swFetchCalled = true;
+      throw new Error('SW fetch should not be called when tab injection is active');
+    }};
+
+    eval(code);
+
+    const callRuntimeMsg = (payload) => new Promise((resolve) => {{
+      runtimeOnMessageListener(payload, {{}}, (resp) => resolve(resp));
+    }});
+
+    (async () => {{
+      // 1. Trigger scotty_upload from native host -> must route to tab 77 page_main
+      await nativeOnMessageListener({{
+        command: 'scotty_upload',
+        requestId: 'req-scotty-p03',
+        payload: {{ sourceId: 'src-p03', filename: 'a.pdf', notebookId: 'nb-1', fileBase64: Buffer.from('hi').toString('base64') }},
+      }});
+      await new Promise((r) => setTimeout(r, 25));
+
+      // 2. Check get_status includes extensionId and lastError
+      const statusResp = await callRuntimeMsg({{ type: 'get_status' }});
+
+      // 3. Check discover_notebooks, get_allowlist, and update_allowlist bridges
+      const discResp = await callRuntimeMsg({{ type: 'discover_notebooks' }});
+      const getAllowResp = await callRuntimeMsg({{ type: 'get_allowlist' }});
+      const updResp = await callRuntimeMsg({{
+        type: 'update_allowlist',
+        notebooks: {{ '11111111-1111-4111-8111-111111111111': {{ title: 'Discovered NB', mode: 'INTERACTIVE' }} }},
+        validate_uuids: true,
+      }});
+
+      console.log(JSON.stringify({{
+        swFetchCalled,
+        tabCommands: sentToTab.map((x) => x.msg.command),
+        scottyNativeReply: postedToNative.find((m) => m.requestId === 'req-scotty-p03'),
+        statusResp,
+        discOk: discResp?.ok,
+        discCount: discResp?.notebooks?.length,
+        getAllowOk: getAllowResp?.ok,
+        updOk: updResp?.ok,
+        storedMode: localStore.allowlisted_notebooks?.['11111111-1111-4111-8111-111111111111']?.mode,
+      }}));
+    }})().catch((err) => {{
+      console.error(err);
+      process.exit(1);
+    }});
+    """
+    out = _run_node_script(script)
+    assert out["swFetchCalled"] is False
+    assert "scotty_upload" in out["tabCommands"]
+    assert out["scottyNativeReply"]["ok"] is True
+    assert out["scottyNativeReply"]["routedViaPageMain"] is True
+    assert out["statusResp"]["extensionId"] == "abcdefghijklmnopabcdefghijklmnop"
+    assert "lastError" in out["statusResp"]
+    assert out["discOk"] is True
+    assert out["discCount"] == 1
+    assert out["getAllowOk"] is True
+    assert out["updOk"] is True
+    assert out["storedMode"] == "INTERACTIVE"
+
 

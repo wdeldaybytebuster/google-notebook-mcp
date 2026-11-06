@@ -11,17 +11,14 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mcp_gateway.broker.allowlist import AllowlistConfig
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon
-from mcp_gateway.broker.session import SessionLock, SessionState
+from mcp_gateway.broker.session import SessionState
 from mcp_gateway.schemas.error import (
     INVALID_ARGUMENT,
     NOT_FOUND,

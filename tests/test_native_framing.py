@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from mcp_gateway.host.native_host import (
-    CHUNK_SIZE,
     IPC_FRAME_FORMAT,
     MAX_MESSAGE_SIZE,
     chunk_message,

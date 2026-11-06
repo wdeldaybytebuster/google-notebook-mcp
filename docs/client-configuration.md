@@ -11,9 +11,9 @@ The Google Notebook MCP operates on a 5-tier zero-raw-cookie bridge:
 [Client (AI Agent)] 
        │ (stdio JSON-RPC)
 [Tier 2: MCP Facade (`cli.py mcp`)]
-       │ (Local IPC: $XDG_RUNTIME_DIR/broker.sock or Windows Named Pipe, >I)
+       │ (Local IPC: $XDG_RUNTIME_DIR/notebooklm-mcp/broker.sock or Windows Named Pipe, >I)
 [Tier 2: Broker Daemon (`cli.py serve`)]
-       │ (Local IPC: $XDG_RUNTIME_DIR/broker.sock or Windows Named Pipe, >I)
+       │ (Local IPC: $XDG_RUNTIME_DIR/notebooklm-mcp/broker.sock or Windows Named Pipe, >I)
 [Tier 3: Native Messaging Host (`native_host.py`)]
        │ (Chrome stdio framing: @I, chunked 512 KiB)
 [Tier 4: Browser Companion Extension (MV3)]
@@ -30,21 +30,28 @@ python3 install_and_onboard.py
 
 ### Manual Pre-requisites Checklist
 If configuring manually:
-1. **Chrome Extension Loaded**: Unpacked extension in `src/extension/` loaded into Google Chrome (`chrome://extensions` with Developer Mode enabled). Note your Extension ID (e.g. `abcdefghijklmnop...`).
+1. **Chrome Extension Loaded**: Unpacked extension in `src/extension/` loaded into Google Chrome (`chrome://extensions` with Developer Mode enabled). Note your Extension ID (e.g. `abcdefghijklmnop...`) or copy the command shown in the extension popup's **Setup Mode** banner.
 2. **Native Messaging Host Registered**:
    ```bash
-   python3 -m mcp_gateway.cli install --extension-id <YOUR_EXTENSION_ID>
+   python3 setup_native_host.py --extension-id <YOUR_EXTENSION_ID>
+   # or: python3 -m mcp_gateway.cli install --extension-id <YOUR_EXTENSION_ID>
    ```
 3. **Broker Daemon Running**:
    ```bash
    python3 -m mcp_gateway.cli serve
    ```
 4. **Notebook Allowlist Configured**:
-   Ensure notebook IDs are present in `~/.config/notebooklm-mcp-bridge/allowlist.json`.
+   Select your notebooks (and toggle `Read Only` vs `Interactive` permissions) directly in the Chrome Extension Popup checklist, or ensure notebook entries are present in `~/.config/notebooklm-mcp-bridge/allowlist.json`.
 
 ---
 
 ## 2. Drop-In Client Configurations
+
+> **Default Cross-Platform IPC Path (`get_default_ipc_path()`):**
+> You do **not** need to set `MCP_BROKER_SOCKET` unless overriding the default path on both the broker and client. By default, `get_default_ipc_path()` automatically resolves:
+> - **Linux**: `$XDG_RUNTIME_DIR/notebooklm-mcp/broker.sock` (fallback: `~/.config/notebooklm-mcp-bridge/broker.sock`)
+> - **macOS**: `~/Library/Application Support/notebooklm-mcp/broker.sock`
+> - **Windows**: `\\.\pipe\notebooklm-mcp-broker`
 
 ### A. Antigravity IDE
 Place configuration in `~/.gemini/antigravity-ide/mcp_config.json` or project-level `.gemini/config/mcp_config.json`:
@@ -60,7 +67,6 @@ Place configuration in `~/.gemini/antigravity-ide/mcp_config.json` or project-le
         "mcp"
       ],
       "env": {
-        "MCP_BROKER_SOCKET": "/tmp/notebooklm-mcp-broker.sock",
         "UV_THREADPOOL_SIZE": "3"
       }
     }
@@ -86,7 +92,6 @@ Or configure via `config/clients/antigravity_cli.json`:
   "command": "python3",
   "args": ["-m", "mcp_gateway.cli", "mcp"],
   "env": {
-    "MCP_BROKER_SOCKET": "/tmp/notebooklm-mcp-broker.sock",
     "UV_THREADPOOL_SIZE": "3"
   }
 }
@@ -119,7 +124,6 @@ Or add directly to `~/.claude.json` or `.claude.json`:
         "mcp"
       ],
       "env": {
-        "MCP_BROKER_SOCKET": "/tmp/notebooklm-mcp-broker.sock",
         "UV_THREADPOOL_SIZE": "3"
       }
     }
@@ -148,7 +152,6 @@ Add to `~/.cursor/mcp.json` or `.cursor/mcp.json` within your workspace:
         "mcp"
       ],
       "env": {
-        "MCP_BROKER_SOCKET": "/tmp/notebooklm-mcp-broker.sock",
         "UV_THREADPOOL_SIZE": "3"
       }
     }
@@ -174,7 +177,6 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
         "mcp"
       ],
       "env": {
-        "MCP_BROKER_SOCKET": "/tmp/notebooklm-mcp-broker.sock",
         "UV_THREADPOOL_SIZE": "3"
       }
     }
@@ -197,12 +199,12 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/Google Notebook MCP
-ExecStart=%h/Projects/Google Notebook MCP/.venv/bin/python3 -m mcp_gateway.cli serve
+WorkingDirectory="%h/Projects/Google Notebook MCP"
+ExecStart="%h/Projects/Google Notebook MCP/.venv/bin/python3" -m mcp_gateway.cli serve
 Restart=always
 RestartSec=5
 Environment=UV_THREADPOOL_SIZE=3
-Environment=MCP_BROKER_SOCKET=/tmp/notebooklm-mcp-broker.sock
+Environment=MCP_BROKER_SOCKET=%t/notebooklm-mcp/broker.sock
 
 [Install]
 WantedBy=default.target
@@ -220,8 +222,13 @@ systemctl --user enable --now gemini-notebook-mcp.service
 
 1. **Verify Broker Listening**:
    ```bash
-   ls -la /tmp/notebooklm-mcp-broker.sock
-   # Must show srw------- (permissions 0o600)
+   # If XDG_RUNTIME_DIR is set:
+   ls -la "${XDG_RUNTIME_DIR:-$HOME/.config/notebooklm-mcp-bridge}/notebooklm-mcp/broker.sock"
+   # Fallback if XDG_RUNTIME_DIR is unset:
+   ls -la "$HOME/.config/notebooklm-mcp-bridge/broker.sock"
+   # Or query gateway directly:
+   python3 -c "from mcp_gateway.transport.paths import get_default_ipc_path; print(get_default_ipc_path())"
+   # Must show srw------- (permissions 0o600) inside a 0o700 directory
    ```
 2. **Verify Native Host Manifest**:
    ```bash

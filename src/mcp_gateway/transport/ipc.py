@@ -117,6 +117,42 @@ class UnixSocketServer:
         await self.stop()
 
 
+class _NamedPipeTransport(asyncio.Transport):
+    """Stream transport adapter wrapping a connected Win32 Named Pipe handle."""
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        protocol: asyncio.BaseProtocol,
+        pipe_handle: Any,
+        win32file: Any,
+    ) -> None:
+        super().__init__()
+        self._loop = loop
+        self._protocol = protocol
+        self._pipe_handle = pipe_handle
+        self._win32file = win32file
+        self._closing = False
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def write(self, data: Any) -> None:
+        if self._closing or not data:
+            return
+        try:
+            overlapped = self._win32file.OVERLAPPED()
+            self._win32file.WriteFile(self._pipe_handle, bytes(data), overlapped)
+        except Exception as exc:
+            self._closing = True
+            self._loop.call_soon(self._protocol.connection_lost, exc)
+
+    def close(self) -> None:
+        if not self._closing:
+            self._closing = True
+            self._loop.call_soon(self._protocol.connection_lost, None)
+
+
 class WindowsNamedPipeServer:
     """Async Windows Named Pipe server with Overlapped I/O and DACL security.
 
@@ -134,11 +170,77 @@ class WindowsNamedPipeServer:
         self._serving = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server_task: asyncio.Task[None] | None = None
+        self._client_tasks: set[asyncio.Task[None]] = set()
+        self._active_handles: set[Any] = set()
 
     async def start(self) -> None:
         self._serving = True
         self._loop = asyncio.get_running_loop()
         self._server_task = asyncio.create_task(self._listen_loop())
+
+    async def _dispatch_connected_pipe(
+        self,
+        pipe_handle: Any,
+        win32file: Any,
+        win32pipe: Any,
+    ) -> None:
+        """Wraps a connected Win32 pipe handle in asyncio StreamReader/StreamWriter and dispatches to callback."""
+        self._active_handles.add(pipe_handle)
+        loop = asyncio.get_running_loop()
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader, loop=loop)
+        transport = _NamedPipeTransport(loop, protocol, pipe_handle, win32file)
+        protocol.connection_made(transport)
+        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+
+        async def _pump_reads() -> None:
+            while not transport.is_closing():
+                try:
+                    overlapped = win32file.OVERLAPPED()
+                    overlapped.hEvent = win32file.CreateEvent(None, True, False, None)
+                    try:
+                        _hr, chunk = await loop.run_in_executor(
+                            None,
+                            win32file.ReadFile,
+                            pipe_handle,
+                            65536,
+                            overlapped,
+                        )
+                        if not chunk:
+                            break
+                        reader.feed_data(bytes(chunk))
+                    finally:
+                        if getattr(overlapped, "hEvent", None) is not None:
+                            try:
+                                win32file.CloseHandle(overlapped.hEvent)
+                            except Exception:
+                                pass
+                except Exception:
+                    break
+            reader.feed_eof()
+
+        read_task = asyncio.create_task(_pump_reads())
+        try:
+            cb_res = self.client_connected_cb(reader, writer)
+            if asyncio.iscoroutine(cb_res):
+                await cb_res
+        finally:
+            self._active_handles.discard(pipe_handle)
+            transport.close()
+            if not read_task.done():
+                read_task.cancel()
+            try:
+                await read_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                win32pipe.DisconnectNamedPipe(pipe_handle)
+            except Exception:
+                pass
+            try:
+                win32file.CloseHandle(pipe_handle)
+            except Exception:
+                pass
 
     async def _listen_loop(self) -> None:
         # On Windows, win32pipe and win32file provide overlapped pipe creation
@@ -199,11 +301,32 @@ class WindowsNamedPipeServer:
             try:
                 overlapped = win32file.OVERLAPPED()
                 overlapped.hEvent = win32file.CreateEvent(None, True, False, None)
-                res = win32pipe.ConnectNamedPipe(pipe_handle, overlapped)
-                if res != 0:
-                    await self._wait_event(overlapped.hEvent)
+                try:
+                    res = win32pipe.ConnectNamedPipe(pipe_handle, overlapped)
+                    if res != 0:
+                        await self._wait_event(overlapped.hEvent)
+                except Exception as exc:
+                    # WinError 535: ERROR_PIPE_CONNECTED (client connected between CreateNamedPipe and ConnectNamedPipe)
+                    win_err = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+                    if win_err != 535:
+                        raise
+                finally:
+                    if getattr(overlapped, "hEvent", None) is not None:
+                        try:
+                            win32file.CloseHandle(overlapped.hEvent)
+                        except Exception:
+                            pass
+
+                client_task = asyncio.create_task(
+                    self._dispatch_connected_pipe(pipe_handle, win32file, win32pipe)
+                )
+                self._client_tasks.add(client_task)
+                client_task.add_done_callback(self._client_tasks.discard)
             except Exception:
-                win32file.CloseHandle(pipe_handle)
+                try:
+                    win32file.CloseHandle(pipe_handle)
+                except Exception:
+                    pass
             await asyncio.sleep(0.01)
 
     async def _wait_event(self, handle: Any) -> None:
@@ -221,6 +344,21 @@ class WindowsNamedPipeServer:
 
     async def stop(self) -> None:
         self._serving = False
+        if sys.platform == "win32":
+            try:
+                import importlib
+                win32file: Any = importlib.import_module("win32file")
+                for handle in list(self._active_handles):
+                    try:
+                        win32file.CancelIo(handle)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        self._active_handles.clear()
+        for task in list(self._client_tasks):
+            task.cancel()
+        self._client_tasks.clear()
         if self._server_task:
             self._server_task.cancel()
             try:

@@ -356,9 +356,12 @@ def main() -> None:
 
     try:
         asyncio.run(relay_loop(socket_path, allowed_extension_id))
-    finally:
-        os._exit(0)
+    except Exception as exc:
+        print(f"[native_host] fatal error in relay_loop: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        os._exit(0)

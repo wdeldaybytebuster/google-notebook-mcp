@@ -1,12 +1,12 @@
 {
   "_comment": {
-    "version": "Schema version — increment when fields are added or removed.",
-    "provider_mode": "Execution mode for the browser companion. 'browser' = Manifest V3 extension (default). Future: 'headless'.",
+    "version": "Schema version (2 = structured notebook permissions map; 1 = legacy flat array).",
+    "provider_mode": "Execution mode for the browser companion. 'browser' = Manifest V3 extension (default).",
     "accounts": "List of Google account email addresses permitted to access notebooks via MCP. Empty = all authenticated accounts.",
-    "notebooks": "List of notebook IDs explicitly allowlisted for MCP access. Empty = no notebooks allowed (deny-all default)."
+    "notebooks": "Map of notebook IDs to {'title': str, 'mode': 'READ_ONLY' | 'INTERACTIVE'}. Empty = no notebooks allowed (deny-all default)."
   },
-  "version": 1,
+  "version": 2,
   "provider_mode": "browser",
   "accounts": [],
-  "notebooks": []
+  "notebooks": {}
 }

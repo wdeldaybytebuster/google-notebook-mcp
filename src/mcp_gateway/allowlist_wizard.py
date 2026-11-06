@@ -22,9 +22,11 @@ from typing import Any, cast
 from mcp_gateway.broker.allowlist import (
     AllowlistConfig,
     DEFAULT_ALLOWLIST_PATH,
-    add_notebook,
+    NotebookMode,
+    get_notebook_mode,
     load_allowlist,
     save_allowlist,
+    set_notebook_permission,
 )
 from mcp_gateway.transport import get_default_ipc_path, open_ipc_connection
 
@@ -92,10 +94,10 @@ async def run_seed_wizard(
 ) -> int:
     """Interactive allowlist seed wizard.
 
-    1. Calls list_notebooks via broker IPC.
+    1. Calls discover_notebooks via broker IPC (unfiltered by allowlist.json).
     2. Displays discovered notebooks as a numbered list.
-    3. Prompts the user to enter the numbers of notebooks to allowlist.
-    4. Writes the selection to allowlist.json.
+    3. Prompts the user to enter the numbers of notebooks to allowlist and choose READ_ONLY or INTERACTIVE mode.
+    4. Writes the structured v2 selection to allowlist.json and triggers live reload on the broker.
     """
     target_path = allowlist_path or DEFAULT_ALLOWLIST_PATH
 
@@ -104,12 +106,12 @@ async def run_seed_wizard(
     print("=" * 60 + "\n", file=sys.stderr)
     print("[*] Querying broker for your visible notebooks...\n", file=sys.stderr)
 
-    result = await _send_recv(socket_path, {"action": "list_notebooks"})
+    result = await _send_recv(socket_path, {"action": "discover_notebooks"})
 
     if not result.get("ok"):
         err = result.get("error", {})
         print(
-            f"[!] Failed to list notebooks: {err.get('message', result)}\n"
+            f"[!] Failed to discover notebooks: {err.get('message', result)}\n"
             "    Ensure Chrome is open, the extension is active, and you are\n"
             "    signed in to notebook.google.com.",
             file=sys.stderr,
@@ -122,15 +124,9 @@ async def run_seed_wizard(
 
     if not notebooks:
         print(
-            "[!] No notebooks were returned by the broker.\n"
-            "    This usually means the allowlist in allowlist.json is empty\n"
-            "    (deny-all policy) and the broker filtered all results.\n\n"
-            "    For initial seeding, temporarily add an empty allowlist\n"
-            "    so list_notebooks can discover all your notebooks. Then\n"
-            "    re-run this wizard.\n\n"
-            "    Hint: Delete or clear the 'notebooks' array in:\n"
-            f"    {target_path}\n"
-            "    and restart the broker before running this wizard.",
+            "[!] No notebooks were discovered in your Google account.\n"
+            "    Please create at least one notebook at https://notebook.google.com\n"
+            "    and re-run this wizard.",
             file=sys.stderr,
         )
         return 1
@@ -140,7 +136,8 @@ async def run_seed_wizard(
         file=sys.stderr,
     )
     for i, nb in enumerate(notebooks, start=1):
-        print(f"  [{i:2d}] {nb.get('title', '(untitled)')}", file=sys.stderr)
+        status_tag = f" [Allowlisted: {nb.get('mode', 'INTERACTIVE')}]" if nb.get("allowed") else ""
+        print(f"  [{i:2d}] {nb.get('title', '(untitled)')}{status_tag}", file=sys.stderr)
         print(f"       ID: {nb.get('id', '')}", file=sys.stderr)
 
     print(
@@ -183,36 +180,71 @@ async def run_seed_wizard(
 
     selected = [notebooks[i] for i in selected_indices]
 
+    print(
+        "\nSelect permission mode for the selected notebook(s):\n"
+        "  [1] READ_ONLY   (Read + query_notebook permitted; add_source/create_note/delete_note blocked)\n"
+        "  [2] INTERACTIVE (Full read, query, source upload, and note management permitted)\n",
+        file=sys.stderr,
+    )
+    chosen_mode: NotebookMode = "READ_ONLY"
+    try:
+        mode_raw = input("  Mode [1/2, default=1 READ_ONLY] > ").strip().upper()
+        if mode_raw in ("2", "INTERACTIVE", "RW"):
+            chosen_mode = "INTERACTIVE"
+    except EOFError:
+        chosen_mode = "READ_ONLY"
+    except KeyboardInterrupt:
+        print("\n[!] Aborted by user.", file=sys.stderr)
+        return 1
+
     # Load or create the allowlist
     try:
         config = load_allowlist(target_path)
     except FileNotFoundError:
         config = AllowlistConfig(
-            version=1,
+            version=2,
             provider_mode="browser",
             accounts=[],
             notebooks=[],
+            source_path=target_path,
         )
 
     for nb in selected:
-        config = add_notebook(config, str(nb["id"]))
+        config = set_notebook_permission(
+            config,
+            str(nb["id"]),
+            title=str(nb.get("title", "")),
+            mode=chosen_mode,
+        )
 
     save_allowlist(config, target_path)
+
+    # Notify running broker daemon for live reload if using default allowlist path
+    if allowlist_path is None:
+        await _send_recv(
+            socket_path,
+            {
+                "action": "update_allowlist",
+                "notebooks": {
+                    nb_id: config.notebook_permissions[nb_id].to_dict()
+                    for nb_id in config.notebooks
+                },
+            },
+        )
 
     print("\n[*] Allowlist updated successfully!\n", file=sys.stderr)
     print(f"    File: {target_path}", file=sys.stderr)
     print(f"    Allowlisted notebooks ({len(config.notebooks)} total):\n", file=sys.stderr)
     for nb_id in config.notebooks:
-        # Try to find the title for display
-        title = next(
+        perm_mode = get_notebook_mode(config, nb_id)
+        title = config.titles.get(nb_id) or next(
             (n.get("title", "") for n in notebooks if n.get("id") == nb_id),
             "(external)",
         )
-        print(f"      • {title} [{nb_id}]", file=sys.stderr)
+        print(f"      • {title} [{nb_id}] ({perm_mode})", file=sys.stderr)
 
     print(
-        "\n[*] MCP tools are now active for the selected notebooks.\n"
-        "    Restart the broker daemon to pick up the new allowlist.\n",
+        "\n[*] MCP tools are now active for the selected notebooks.\n",
         file=sys.stderr,
     )
     return 0

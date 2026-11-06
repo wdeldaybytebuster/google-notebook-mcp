@@ -34,8 +34,15 @@ import mcp.types as types
 
 from mcp_gateway.broker.allowlist import (
     AllowlistConfig,
+    DEFAULT_ALLOWLIST_PATH,
+    NotebookMode,
+    NotebookPermission,
+    get_notebook_mode,
     is_notebook_allowed,
+    is_tool_permitted_for_notebook,
     load_allowlist,
+    parse_and_validate_notebook_id,
+    save_allowlist,
 )
 from mcp_gateway.broker.secret_scrubber import scrub_dict
 from mcp_gateway.engine.coordinate import CitationSpan, normalize_citation
@@ -67,6 +74,7 @@ from mcp_gateway.schemas.error import (
     INVALID_ARGUMENT,
     MUTATION_UNKNOWN,
     NOT_FOUND,
+    PERMISSION_DENIED,
     REQUEST_KEY_CONFLICT,
     RESOURCE_EXHAUSTED,
     UPSTREAM_SCHEMA_DRIFT,
@@ -91,6 +99,7 @@ from mcp_gateway.storage.journal import (
     MutationJournal,
     MutationState,
     OperationType,
+    compute_payload_hash,
 )
 from mcp_gateway.transport import (
     BaseIpcServer,
@@ -155,7 +164,14 @@ class BrokerDaemon:
 
     def __init__(self, config: BrokerConfig | None = None) -> None:
         self.config = config or BrokerConfig()
-        self.allowlist: AllowlistConfig | None = None
+        self.allowlist_config: AllowlistConfig = AllowlistConfig(
+            version=2,
+            provider_mode="browser",
+            accounts=[],
+            notebooks=[],
+            source_path=self.config.allowlist_path,
+        )
+        self.allowlist: AllowlistConfig = self.allowlist_config
         self._load_allowlist_safe()
 
         db_path = (
@@ -167,6 +183,7 @@ class BrokerDaemon:
         self.session_lock = SessionLock(self.config.capability_secret)
         self._active_companion_writer: asyncio.StreamWriter | None = None
         self._pending_responses: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._inbound_ipc_tasks: set[asyncio.Task[None]] = set()
         self._session_mutex: asyncio.Lock = asyncio.Lock()
         self._companion_ipc_mutex: ReentrantAsyncLock = ReentrantAsyncLock()
         self._mock_available_memory_bytes: int | None = None
@@ -177,21 +194,32 @@ class BrokerDaemon:
 
     def _load_allowlist_safe(self) -> None:
         try:
-            self.allowlist = load_allowlist(self.config.allowlist_path)
+            if getattr(self, "allowlist_config", None) is not None:
+                self.allowlist_config.reload(self.config.allowlist_path)
+            else:
+                self.allowlist_config = load_allowlist(self.config.allowlist_path)
+            self.allowlist = self.allowlist_config
         except Exception as exc:
             print(
                 f"[broker] Notice: Allowlist not loaded ({exc}). Using deny-all policy.",
                 file=sys.stderr,
             )
-            self.allowlist = AllowlistConfig(
-                version=1,
-                provider_mode="browser",
-                accounts=[],
-                notebooks=[],
-            )
+            if getattr(self, "allowlist_config", None) is None:
+                self.allowlist_config = AllowlistConfig(
+                    version=2,
+                    provider_mode="browser",
+                    accounts=[],
+                    notebooks=[],
+                    source_path=self.config.allowlist_path,
+                )
+            self.allowlist = self.allowlist_config
 
     def reload_allowlist(self) -> None:
-        self._load_allowlist_safe()
+        try:
+            self.allowlist_config.reload(self.config.allowlist_path)
+            self.allowlist = self.allowlist_config
+        except Exception:
+            self._load_allowlist_safe()
 
     def _attach_identity_preflight(
         self, payload: dict[str, Any], command: dict[str, Any] | None = None
@@ -307,8 +335,9 @@ class BrokerDaemon:
                         "extension_id": os.environ.get("ALLOWED_EXTENSION_ID", ""),
                     }
                     ack_bytes = json.dumps(ack).encode("utf-8")
-                    writer.write(struct.pack(IPC_FRAME_FORMAT, len(ack_bytes)) + ack_bytes)
-                    await writer.drain()
+                    async with self._companion_ipc_mutex:
+                        writer.write(struct.pack(IPC_FRAME_FORMAT, len(ack_bytes)) + ack_bytes)
+                        await writer.drain()
                     continue
 
                 # Response frame handling for pending companion requests
@@ -329,12 +358,21 @@ class BrokerDaemon:
                         "timestamp": time.time(),
                     }
                     pong_bytes = json.dumps(pong_reply).encode("utf-8")
-                    writer.write(struct.pack(IPC_FRAME_FORMAT, len(pong_bytes)) + pong_bytes)
-                    await writer.drain()
+                    async with self._companion_ipc_mutex:
+                        writer.write(struct.pack(IPC_FRAME_FORMAT, len(pong_bytes)) + pong_bytes)
+                        await writer.drain()
                     continue
 
                 # Unsolicited pong frame handling
                 if raw_message.get("type") in ("pong", "HEARTBEAT_PONG") or raw_message.get("command") in ("pong", "HEARTBEAT_PONG"):
+                    continue
+
+                # If inbound command arrives over the multiplexed companion connection,
+                # dispatch asynchronously so reader remains free to receive RPC replies.
+                if writer is self._active_companion_writer:
+                    task = asyncio.create_task(self._dispatch_companion_inbound(raw_message, writer))
+                    self._inbound_ipc_tasks.add(task)
+                    task.add_done_callback(self._inbound_ipc_tasks.discard)
                     continue
 
                 # Otherwise dispatch inbound command and send back reply
@@ -353,6 +391,22 @@ class BrokerDaemon:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+    async def _dispatch_companion_inbound(
+        self,
+        raw_message: dict[str, Any],
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Dispatches an inbound broker command sent over the companion's multiplexed IPC pipe."""
+        try:
+            reply = await self.dispatch(raw_message)
+            reply_bytes = json.dumps(reply).encode("utf-8")
+            frame = struct.pack(IPC_FRAME_FORMAT, len(reply_bytes)) + reply_bytes
+            async with self._companion_ipc_mutex:
+                writer.write(frame)
+                await writer.drain()
+        except Exception as exc:
+            print(f"[broker] Companion inbound dispatch failed: {exc}", file=sys.stderr)
 
     async def send_to_companion(
         self,
@@ -529,49 +583,83 @@ class BrokerDaemon:
     async def dispatch(self, command: dict[str, Any]) -> dict[str, Any]:
         """Dispatches an action with mandatory allowlist verification and secret scrubbing."""
         correlation_id = command.get("request_key") or command.get("idempotency_key")
+        request_id = str(command["requestId"]) if command.get("requestId") else None
         action = str(command.get("action") or command.get("command") or "")
 
         # ADR-011: Dedicated handler for select_notebook
         if action == "select_notebook":
             result = await self._handle_select_notebook(command)
-            return self._finalize_dispatch(result, correlation_id)
+            return self._finalize_dispatch(result, correlation_id, request_id=request_id)
 
         # Domain E: Dedicated handler for ping / HEARTBEAT_PING
         if action in ("ping", "HEARTBEAT_PING") or command.get("type") in ("ping", "HEARTBEAT_PING"):
-            return {
+            pong: dict[str, Any] = {
                 "ok": True,
                 "type": "pong",
                 "command": "HEARTBEAT_PONG",
                 "timestamp": time.time(),
             }
+            if request_id:
+                pong["requestId"] = request_id
+            return pong
+
+        # Administrative / Companion Forwarding actions bypass single-notebook SessionLock
+        if action == "companion_forward":
+            result = await self.send_to_companion(
+                str(command["companion_command"]),
+                dict(command.get("payload", {})),
+                float(command.get("timeout_seconds", 60.0)),
+            )
+            return self._finalize_dispatch(result, correlation_id, request_id=request_id)
+
+        if action == "get_allowlist":
+            result = await self._handle_get_allowlist(command)
+            return self._finalize_dispatch(result, correlation_id, request_id=request_id)
+
+        if action == "update_allowlist":
+            result = await self._handle_update_allowlist(command)
+            return self._finalize_dispatch(result, correlation_id, request_id=request_id)
+
+        if action == "discover_notebooks":
+            result = await self._handle_discover_notebooks(command)
+            return self._finalize_dispatch(result, correlation_id, request_id=request_id)
 
         # ADR-011: Validate session state and apply parameter overwrite
         validation_err = await self.session_lock.validate_and_prepare(action, command)
         if validation_err is not None:
-            return self._finalize_dispatch(validation_err.to_dict(), correlation_id)
+            return self._finalize_dispatch(validation_err.to_dict(), correlation_id, request_id=request_id)
 
-        # Mandatory allowlist policy check
+        # Mandatory allowlist and granular READ_ONLY / INTERACTIVE RBAC policy check
         notebook_id = command.get("notebook_id")
         if notebook_id is not None:
-            self.reload_allowlist()
-            assert self.allowlist is not None
-            if not is_notebook_allowed(self.allowlist, str(notebook_id)):
+            async with self._session_mutex:
+                self.reload_allowlist()
+                active_cfg = self.allowlist_config
+                nb_str = str(notebook_id)
+                allowed = is_notebook_allowed(active_cfg, nb_str)
+                permitted = is_tool_permitted_for_notebook(active_cfg, nb_str, action) if allowed else False
+
+            if not allowed:
                 err_dict = make_error(
                     ALLOWLIST_DENIED,
                     "Notebook is not in the allowlist. Access denied by local policy.",
                     retryable=False,
                     mcp_correlation_id=correlation_id,
                 ).to_dict()
-                return self._finalize_dispatch(err_dict, correlation_id)
+                return self._finalize_dispatch(err_dict, correlation_id, request_id=request_id)
+
+            if not permitted:
+                err_dict = make_error(
+                    PERMISSION_DENIED,
+                    f"Notebook '{notebook_id}' is configured as READ_ONLY in allowlist.json. "
+                    f"Mutating tool '{action}' requires INTERACTIVE mode.",
+                    retryable=False,
+                    mcp_correlation_id=correlation_id,
+                ).to_dict()
+                return self._finalize_dispatch(err_dict, correlation_id, request_id=request_id)
 
         try:
-            if action == "companion_forward":
-                result = await self.send_to_companion(
-                    str(command["companion_command"]),
-                    dict(command.get("payload", {})),
-                    float(command.get("timeout_seconds", 60.0)),
-                )
-            elif action == "list_notebooks":
+            if action == "list_notebooks":
                 result = await self._handle_list_notebooks(command)
             elif action == "get_notebook_metadata":
                 result = await self._handle_get_notebook_metadata(command)
@@ -602,10 +690,17 @@ class BrokerDaemon:
                 mcp_correlation_id=correlation_id,
             ).to_dict()
 
-        return self._finalize_dispatch(result, correlation_id)
+        return self._finalize_dispatch(result, correlation_id, request_id=request_id)
 
-    def _finalize_dispatch(self, result: dict[str, Any], correlation_id: str | None) -> dict[str, Any]:
+    def _finalize_dispatch(
+        self,
+        result: dict[str, Any],
+        correlation_id: str | None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
         """Applies P-04 correlation propagation and secret scrubbing."""
+        if request_id and "requestId" not in result:
+            result["requestId"] = request_id
         if correlation_id:
             if "_meta" not in result:
                 result["_meta"] = {}
@@ -614,10 +709,12 @@ class BrokerDaemon:
                 result["error"]["mcp_correlation_id"] = correlation_id
         return scrub_dict(result)
 
-    async def _fetch_all_allowed_notebooks(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        """Fetches all allowlisted notebooks from wXbhsf without session filtering."""
+    async def _fetch_all_discovered_notebooks(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        """Fetches all visible notebooks from wXbhsf without allowlist or session filtering."""
         rpc_payload = make_list_notebooks_payload(page_size=100)
-        res = await self.send_to_companion("batchexecute", {"rpcId": "wXbhsf", "paramsJson": rpc_payload})
+        rpc_msg: dict[str, Any] = {"rpcId": "wXbhsf", "paramsJson": rpc_payload}
+        self._attach_identity_preflight(rpc_msg)
+        res = await self.send_to_companion("batchexecute", rpc_msg)
         if not res.get("ok"):
             return [], res
 
@@ -626,6 +723,7 @@ class BrokerDaemon:
         records = decoder.feed(body.encode("utf-8"))
 
         notebooks: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
         for record in records:
             if record.get("rpc_id") == "wXbhsf":
                 raw_items = record.get("data")
@@ -647,13 +745,183 @@ class BrokerDaemon:
                             elif len(item) > 0:
                                 nb_id = str(item[0])
 
-                            if nb_id:
-                                # Filter strictly by allowlist
-                                assert self.allowlist is not None
-                                if is_notebook_allowed(self.allowlist, nb_id):
-                                    notebooks.append({"id": nb_id, "title": title})
+                            if nb_id and nb_id not in seen_ids:
+                                seen_ids.add(nb_id)
+                                notebooks.append({"id": nb_id, "title": title})
 
         return notebooks, None
+
+    async def _fetch_all_allowed_notebooks(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        """Fetches all allowlisted notebooks from wXbhsf without session filtering."""
+        discovered, err = await self._fetch_all_discovered_notebooks()
+        if err is not None:
+            return [], err
+        return [
+            nb for nb in discovered
+            if is_notebook_allowed(self.allowlist_config, str(nb.get("id", "")))
+        ], None
+
+    async def _handle_get_allowlist(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Returns the current structured allowlist configuration."""
+        async with self._session_mutex:
+            self.reload_allowlist()
+            cfg = self.allowlist_config
+            notebooks_map = {
+                nb_id: cfg.notebook_permissions.get(
+                    nb_id, NotebookPermission(title="", mode="INTERACTIVE")
+                ).to_dict()
+                for nb_id in cfg.notebooks
+            }
+            return {
+                "ok": True,
+                "version": cfg.version,
+                "provider_mode": cfg.provider_mode,
+                "accounts": list(cfg.accounts),
+                "notebooks": notebooks_map,
+            }
+
+    async def _handle_update_allowlist(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Atomically updates allowlist.json with 0o600 permissions and live-reloads under _session_mutex."""
+        async with self._session_mutex:
+            self.reload_allowlist()
+            current_cfg = self.allowlist_config
+            validate_uuids = bool(command.get("validate_uuids", False) or command.get("manual_entry", False))
+            raw_notebooks = command.get("notebooks")
+
+            if not isinstance(raw_notebooks, (dict, list)):
+                return make_error(
+                    INVALID_ARGUMENT,
+                    "'notebooks' must be a structured dict or list of notebook IDs.",
+                    retryable=False,
+                ).to_dict()
+
+            new_ids: list[str] = []
+            new_perms: dict[str, NotebookPermission] = {}
+
+            if isinstance(raw_notebooks, dict):
+                for raw_id, meta in raw_notebooks.items():
+                    meta_dict = meta if isinstance(meta, dict) else {}
+                    must_validate = bool(meta_dict.get("manual", False))
+                    if must_validate:
+                        try:
+                            clean_id = parse_and_validate_notebook_id(str(raw_id))
+                        except ValueError as exc:
+                            return make_error(INVALID_ARGUMENT, str(exc), retryable=False).to_dict()
+                    else:
+                        clean_id = str(raw_id).strip()
+                        if not clean_id or ".." in clean_id or "\\" in clean_id or "/" in clean_id:
+                            return make_error(
+                                INVALID_ARGUMENT,
+                                f"Invalid notebook ID {raw_id!r}.",
+                                retryable=False,
+                            ).to_dict()
+
+                    raw_mode = str(meta_dict.get("mode", "READ_ONLY")).strip().upper()
+                    norm_mode: NotebookMode = (
+                        "READ_ONLY" if raw_mode in ("READ_ONLY", "READONLY", "READ-ONLY") else "INTERACTIVE"
+                    )
+                    title_str = str(meta_dict.get("title", ""))
+                    if clean_id not in new_perms:
+                        new_ids.append(clean_id)
+                    new_perms[clean_id] = NotebookPermission(title=title_str, mode=norm_mode)
+            else:
+                for item in raw_notebooks:
+                    if validate_uuids:
+                        try:
+                            clean_id = parse_and_validate_notebook_id(str(item))
+                        except ValueError as exc:
+                            return make_error(INVALID_ARGUMENT, str(exc), retryable=False).to_dict()
+                    else:
+                        clean_id = str(item).strip()
+                        if not clean_id or ".." in clean_id or "\\" in clean_id or "/" in clean_id:
+                            return make_error(
+                                INVALID_ARGUMENT,
+                                f"Invalid notebook ID {item!r}.",
+                                retryable=False,
+                            ).to_dict()
+                    if clean_id not in new_perms:
+                        new_ids.append(clean_id)
+                        existing_perm = current_cfg.notebook_permissions.get(clean_id)
+                        new_perms[clean_id] = existing_perm or NotebookPermission(title="", mode="INTERACTIVE")
+
+            accounts_list = (
+                [str(a) for a in command["accounts"]]
+                if isinstance(command.get("accounts"), list)
+                else list(current_cfg.accounts)
+            )
+            target_path = self.config.allowlist_path or current_cfg.source_path or DEFAULT_ALLOWLIST_PATH
+            updated_cfg = AllowlistConfig(
+                version=2,
+                provider_mode=current_cfg.provider_mode,
+                accounts=accounts_list,
+                notebooks=new_ids,
+                notebook_permissions=new_perms,
+                source_path=target_path,
+            )
+            save_allowlist(updated_cfg, target_path)
+            self.allowlist_config.reload(target_path)
+            self.allowlist = self.allowlist_config
+
+            return {
+                "ok": True,
+                "version": self.allowlist_config.version,
+                "notebooks": {
+                    nb_id: self.allowlist_config.notebook_permissions[nb_id].to_dict()
+                    for nb_id in self.allowlist_config.notebooks
+                },
+            }
+
+    async def _handle_discover_notebooks(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Discovers all visible notebooks via wXbhsf annotated with current allowlist status and mode."""
+        discovered, err = await self._fetch_all_discovered_notebooks()
+        if err is not None:
+            return err
+
+        async with self._session_mutex:
+            self.reload_allowlist()
+            cfg = self.allowlist_config
+
+            annotated: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for nb in discovered:
+                nb_id = str(nb.get("id", ""))
+                if not nb_id:
+                    continue
+                seen.add(nb_id)
+                allowed = is_notebook_allowed(cfg, nb_id)
+                perm = cfg.notebook_permissions.get(nb_id)
+                title = str(nb.get("title") or (perm.title if perm else "") or "")
+                mode: NotebookMode = perm.mode if perm else "READ_ONLY"
+                annotated.append({
+                    "id": nb_id,
+                    "title": title,
+                    "allowed": allowed,
+                    "mode": mode,
+                })
+
+            # Include manually allowlisted notebooks not returned in top wXbhsf page
+            for nb_id in cfg.notebooks:
+                if nb_id not in seen:
+                    perm = cfg.notebook_permissions.get(nb_id)
+                    annotated.append({
+                        "id": nb_id,
+                        "title": perm.title if perm else "",
+                        "allowed": True,
+                        "mode": perm.mode if perm else "INTERACTIVE",
+                    })
+
+            allowlist_map = {
+                nb_id: cfg.notebook_permissions.get(
+                    nb_id, NotebookPermission(title="", mode="INTERACTIVE")
+                ).to_dict()
+                for nb_id in cfg.notebooks
+            }
+
+        return {
+            "ok": True,
+            "notebooks": annotated,
+            "allowlist": allowlist_map,
+        }
 
     async def _handle_list_notebooks(self, command: dict[str, Any]) -> dict[str, Any]:
         page_size_arg = command.get("page_size")
@@ -771,11 +1039,11 @@ class BrokerDaemon:
                         pass
 
             self.reload_allowlist()
-            assert self.allowlist is not None
-            is_allowed = is_notebook_allowed(self.allowlist, resolved_id)
+            is_allowed = is_notebook_allowed(self.allowlist_config, resolved_id)
             result = await self.session_lock.select_notebook(resolved_id, is_allowed)
 
             if result.get("ok"):
+                result["mode"] = get_notebook_mode(self.allowlist_config, resolved_id)
                 save_for_project = bool(command.get("save_for_project", True))
                 if save_for_project and resolved_id:
                     from mcp_gateway.broker.project_config import save_project_notebook_config
@@ -912,6 +1180,18 @@ class BrokerDaemon:
 
         existing = self.journal.get(request_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.QUERY_NOTEBOOK
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {request_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -920,12 +1200,29 @@ class BrokerDaemon:
                     retryable=False,
                 ).to_dict()
             elif existing.state == MutationState.CONFIRMED:
-                return {
-                    "ok": True,
-                    "answer": "Cached result for confirmed query.",
-                    "citations": [],
-                    "cached": True,
-                }
+                cached_entry = self.journal.get_query_cache(request_key)
+                if (
+                    cached_entry is not None
+                    and cached_entry.get("notebook_id") == nb_id
+                    and cached_entry.get("query_text") == question
+                ):
+                    try:
+                        parsed = json.loads(cached_entry["response_payload"])
+                        if isinstance(parsed, dict):
+                            return {
+                                "ok": True,
+                                "answer": str(parsed.get("answer", "")),
+                                "citations": list(parsed.get("citations", [])),
+                                "cached": True,
+                            }
+                    except Exception:
+                        pass
+                # Never return synthetic ungrounded stub citations: []
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Confirmed mutation {request_key!r} cache entry is missing or mismatched.",
+                    retryable=False,
+                ).to_dict()
             elif existing.state == MutationState.REJECTED:
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -1005,11 +1302,6 @@ class BrokerDaemon:
             return res
 
         body = str(res.get("body", ""))
-        try:
-            with open("/tmp/raw_query_stream_body.txt", "w", encoding="utf-8") as f:
-                f.write(body)
-        except Exception:
-            pass
         events = parser.feed(body.encode("utf-8"))
         final_events = parser.finalize()
         events.extend(final_events)
@@ -1051,7 +1343,7 @@ class BrokerDaemon:
                 print(f"[broker citation exc] {e} on cit={cit}", file=sys.stderr)
 
         print(
-            f"[broker debug] answer len={len(full_text)}, raw_cits={len(raw_citations)}, norm_cits={len(normalized_citations)}, preview={full_text[:200]!r}",
+            f"[broker debug] answer len={len(full_text)}, raw_cits={len(raw_citations)}, norm_cits={len(normalized_citations)}",
             file=sys.stderr,
         )
 
@@ -1064,21 +1356,33 @@ class BrokerDaemon:
                 retryable=False,
             ).to_dict()
 
+        serialized_citations = [
+            {
+                "source_id": cit.source_id,
+                "text_snippet": cit.text_snippet,
+                "start_char": cit.start_char,
+                "end_char": cit.end_char,
+            }
+            for cit in normalized_citations
+        ]
+        scrubbed_cache_payload = scrub_dict({
+            "answer": full_text,
+            "citations": serialized_citations,
+        })
+        self.journal.put_query_cache(
+            cache_key=request_key,
+            notebook_id=nb_id,
+            query_text=question,
+            response_payload=json.dumps(scrubbed_cache_payload),
+        )
+
         # Transition: CONFIRMED
         self.journal.transition(request_key, MutationState.CONFIRMED)
 
         return {
             "ok": True,
             "answer": full_text,
-            "citations": [
-                {
-                    "source_id": cit.source_id,
-                    "text_snippet": cit.text_snippet,
-                    "start_char": cit.start_char,
-                    "end_char": cit.end_char,
-                }
-                for cit in normalized_citations
-            ],
+            "citations": serialized_citations,
         }
 
     async def _handle_add_source(self, command: dict[str, Any]) -> dict[str, Any]:
@@ -1090,6 +1394,18 @@ class BrokerDaemon:
 
         existing = self.journal.get(idempotency_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.ADD_SOURCE
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {idempotency_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -1305,6 +1621,19 @@ class BrokerDaemon:
 
         existing = self.journal.get(idempotency_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.CREATE_NOTE
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {idempotency_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                    mcp_correlation_id=idempotency_key,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,
@@ -1496,6 +1825,19 @@ class BrokerDaemon:
 
         existing = self.journal.get(idempotency_key)
         if existing is not None:
+            expected_hash = compute_payload_hash(command, self.config.capability_secret)
+            if (
+                existing.notebook_id != nb_id
+                or existing.operation_type != OperationType.DELETE_NOTE
+                or existing.payload_hash != expected_hash
+            ):
+                return make_error(
+                    REQUEST_KEY_CONFLICT,
+                    f"Request key conflict: mutation {idempotency_key!r} exists with conflicting parameters.",
+                    retryable=False,
+                    mcp_correlation_id=idempotency_key,
+                ).to_dict()
+
             if existing.state in (MutationState.SENT, MutationState.UNKNOWN):
                 return make_error(
                     REQUEST_KEY_CONFLICT,

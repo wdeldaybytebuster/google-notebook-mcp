@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+import struct
 from typing import Any, cast
 import pytest
 
 from mcp_gateway.broker.allowlist import (
-    AllowlistConfig,
     add_notebook,
     is_notebook_allowed,
     load_allowlist,
@@ -89,6 +90,115 @@ def test_allowlist_missing_raises(tmp_path: Path) -> None:
     missing_path = tmp_path / "does_not_exist.json"
     with pytest.raises(FileNotFoundError):
         load_allowlist(missing_path)
+
+
+def test_allowlist_v2_structured_modes_reload_and_v1_migration(tmp_path: Path) -> None:
+    import os
+    import stat
+    from mcp_gateway.broker.allowlist import (
+        NotebookPermission,
+        get_notebook_mode,
+        is_tool_permitted_for_notebook,
+        parse_and_validate_notebook_id,
+        set_notebook_permission,
+    )
+
+    # 1. Load legacy v1 flat list -> migrates to INTERACTIVE permissions
+    v1_path = tmp_path / "v1_allowlist.json"
+    v1_path.write_text(
+        json.dumps({
+            "version": 1,
+            "provider_mode": "browser",
+            "accounts": ["dev@example.com"],
+            "notebooks": ["nb-legacy-1"],
+        }),
+        encoding="utf-8",
+    )
+    cfg_v1 = load_allowlist(v1_path)
+    assert is_notebook_allowed(cfg_v1, "nb-legacy-1") is True
+    assert get_notebook_mode(cfg_v1, "nb-legacy-1") == "INTERACTIVE"
+    assert is_tool_permitted_for_notebook(cfg_v1, "nb-legacy-1", "query_notebook") is True
+    assert is_tool_permitted_for_notebook(cfg_v1, "nb-legacy-1", "add_source") is True
+
+    # 2. Set READ_ONLY permission and save as v2 structured map
+    cfg_v2 = set_notebook_permission(
+        cfg_v1,
+        "nb-readonly-2",
+        title="Project Architecture Docs",
+        mode="READ_ONLY",
+    )
+    v2_path = tmp_path / "v2_allowlist.json"
+    save_allowlist(cfg_v2, v2_path)
+    if os.name != "nt":
+        assert stat.S_IMODE(v2_path.stat().st_mode) == 0o600
+
+    raw_saved = json.loads(v2_path.read_text(encoding="utf-8"))
+    assert raw_saved["version"] == 2
+    assert raw_saved["notebooks"]["nb-readonly-2"] == {
+        "title": "Project Architecture Docs",
+        "mode": "READ_ONLY",
+    }
+
+    reloaded = load_allowlist(v2_path)
+    assert is_notebook_allowed(reloaded, "nb-readonly-2") is True
+    assert get_notebook_mode(reloaded, "nb-readonly-2") == "READ_ONLY"
+    assert reloaded.notebook_permissions["nb-readonly-2"] == NotebookPermission(
+        title="Project Architecture Docs",
+        mode="READ_ONLY",
+    )
+
+    # 3. Granular RBAC checks for READ_ONLY vs INTERACTIVE:
+    # READ_ONLY MUST allow read + select_notebook + query_notebook, and MUST block mutating tools
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "list_notebooks") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "select_notebook") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "get_notebook_metadata") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "list_sources") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "list_notes") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "query_notebook") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "add_source") is False
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "create_note") is False
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "delete_note") is False
+
+    # 4. In-place AllowlistConfig.reload() updates singleton state from disk
+    v2_path.write_text(
+        json.dumps({
+            "version": 2,
+            "provider_mode": "browser",
+            "accounts": ["dev@example.com"],
+            "notebooks": {
+                "123e4567-e89b-12d3-a456-426614174000": {
+                    "title": "Hot Reloaded NB",
+                    "mode": "READ_ONLY",
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    reloaded.reload()
+    assert is_notebook_allowed(reloaded, "123e4567-e89b-12d3-a456-426614174000") is True
+    assert get_notebook_mode(reloaded, "123e4567-e89b-12d3-a456-426614174000") == "READ_ONLY"
+
+    # 5. Strict UUIDv4 validation and URL extraction for manual fallback input
+    valid_uuid = "123e4567-e89b-12d3-a456-426614174000"
+    assert parse_and_validate_notebook_id(valid_uuid) == valid_uuid
+    assert (
+        parse_and_validate_notebook_id(
+            f"https://notebook.google.com/notebook/{valid_uuid}?authuser=0"
+        )
+        == valid_uuid
+    )
+    assert (
+        parse_and_validate_notebook_id(
+            f"https://notebooklm.google.com/notebook/{valid_uuid}/"
+        )
+        == valid_uuid
+    )
+    with pytest.raises(ValueError, match="Invalid notebook ID"):
+        parse_and_validate_notebook_id("../../etc/passwd")
+    with pytest.raises(ValueError, match="Invalid notebook ID"):
+        parse_and_validate_notebook_id("https://evil.example.com/notebook/123e4567-e89b-12d3-a456-426614174000")
+    with pytest.raises(ValueError, match="Invalid notebook ID"):
+        parse_and_validate_notebook_id("not-a-uuid")
 
 
 def test_secret_scrubber_tokens() -> None:
@@ -347,3 +457,340 @@ def test_account_identity_preflight_attaches_expected_email_and_accounts(broker:
     out2 = broker._attach_identity_preflight(payload2, custom_cmd)
     assert out2["expectedEmail"] == "custom@example.com"
     assert out2["expectedAccounts"] == ["custom@example.com", "other@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_broker_readonly_permits_query_notebook_and_blocks_mutations(tmp_path: Path) -> None:
+    from mcp_gateway.schemas.error import PERMISSION_DENIED
+
+    allowlist_p = tmp_path / "allowlist.json"
+    allowlist_p.write_text(
+        json.dumps({
+            "version": 2,
+            "provider_mode": "browser",
+            "accounts": ["developer@gmail.com"],
+            "notebooks": {
+                "nb-ro": {"title": "Read Only Docs", "mode": "READ_ONLY"},
+                "nb-rw": {"title": "Interactive Docs", "mode": "INTERACTIVE"},
+            },
+        }),
+        encoding="utf-8",
+    )
+    daemon = BrokerDaemon(
+        BrokerConfig(
+            socket_path=str(tmp_path / "ro.sock"),
+            allowlist_path=allowlist_p,
+            journal_db_path=tmp_path / "journal.db",
+        )
+    )
+
+    # Lock session to nb-ro
+    sel_res = await daemon.dispatch({"action": "select_notebook", "notebook_id": "nb-ro"})
+    assert sel_res["ok"] is True
+    assert sel_res.get("mode") == "READ_ONLY"
+
+    # 1. query_notebook MUST BE PERMITTED on READ_ONLY notebooks (reaches companion -> AUTH_REQUIRED in unit test)
+    q_res = await daemon.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-ro",
+        "question": "What is the architecture?",
+        "request_key": "req-ro-allowed-1",
+    })
+    assert q_res["ok"] is False
+    assert q_res["error"]["code"] == AUTH_REQUIRED  # Permitted past RBAC policy!
+
+    # 2. Mutating tools (add_source, create_note, delete_note) MUST BE BLOCKED with PERMISSION_DENIED
+    add_res = await daemon.dispatch({
+        "action": "add_source",
+        "notebook_id": "nb-ro",
+        "idempotency_key": "idem-ro-1",
+        "source": {"type": "text", "title": "Note", "content": "Body"},
+    })
+    assert add_res["ok"] is False
+    assert add_res["error"]["code"] == PERMISSION_DENIED
+    assert "READ_ONLY" in add_res["error"]["message"]
+
+    note_res = await daemon.dispatch({
+        "action": "create_note",
+        "notebook_id": "nb-ro",
+        "title": "Note",
+        "content": "Body",
+        "idempotency_key": "idem-ro-note",
+    })
+    assert note_res["ok"] is False
+    assert note_res["error"]["code"] == PERMISSION_DENIED
+
+    del_res = await daemon.dispatch({
+        "action": "delete_note",
+        "notebook_id": "nb-ro",
+        "note_id": "note-1",
+        "idempotency_key": "idem-ro-del",
+    })
+    assert del_res["ok"] is False
+    assert del_res["error"]["code"] == PERMISSION_DENIED
+
+
+@pytest.mark.asyncio
+async def test_broker_live_allowlist_reload_with_mutex_and_uuid_validation(
+    broker: BrokerDaemon,
+) -> None:
+    from mcp_gateway.schemas.error import INVALID_ARGUMENT, PERMISSION_DENIED
+
+    valid_uuid = "123e4567-e89b-12d3-a456-426614174000"
+
+    # 1. get_allowlist works in DISCOVERY_ONLY without SESSION_UNLOCKED
+    get_res = await broker.dispatch({"action": "get_allowlist"})
+    assert get_res["ok"] is True
+    assert "nb-allowed-1" in get_res["notebooks"]
+
+    # 2. update_allowlist rejects path traversal / malformed manual IDs when validate_uuids=True
+    bad_res = await broker.dispatch({
+        "action": "update_allowlist",
+        "validate_uuids": True,
+        "notebooks": {
+            "../../etc/passwd": {"title": "Traversal", "mode": "READ_ONLY"},
+        },
+    })
+    assert bad_res["ok"] is False
+    assert bad_res["error"]["code"] == INVALID_ARGUMENT
+
+    # 3. update_allowlist accepts valid UUIDs, saves atomically, and calls self.allowlist_config.reload() under _session_mutex
+    upd_res = await broker.dispatch({
+        "action": "update_allowlist",
+        "validate_uuids": True,
+        "notebooks": {
+            valid_uuid: {"title": "Live Reloaded NB", "mode": "READ_ONLY"},
+        },
+    })
+    assert upd_res["ok"] is True
+    assert upd_res["notebooks"][valid_uuid]["mode"] == "READ_ONLY"
+    assert is_notebook_allowed(broker.allowlist_config, valid_uuid) is True
+
+    # 4. Selecting the newly added notebook succeeds immediately in the live session and enforces READ_ONLY
+    sel_res = await broker.dispatch({"action": "select_notebook", "notebook_id": valid_uuid})
+    assert sel_res["ok"] is True
+    assert sel_res["mode"] == "READ_ONLY"
+
+    mut_res = await broker.dispatch({
+        "action": "add_source",
+        "notebook_id": valid_uuid,
+        "idempotency_key": "idem-live-1",
+        "source": {"type": "text", "title": "T", "content": "C"},
+    })
+    assert mut_res["ok"] is False
+    assert mut_res["error"]["code"] == PERMISSION_DENIED
+
+    # 5. companion_forward is not blocked by SessionLock in DISCOVERY_ONLY or LOCKED
+    fwd_res = await broker.dispatch({
+        "action": "companion_forward",
+        "companion_command": "batchexecute",
+        "payload": {"rpcId": "wXbhsf", "paramsJson": "[]"},
+    })
+    assert fwd_res["ok"] is False
+    assert fwd_res["error"]["code"] == AUTH_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_companion_frame_drain_serialization(allowlist_file: Path) -> None:
+    """Ensures hello_ack and HEARTBEAT_PONG socket writes are mutex-protected against race conditions."""
+    config = BrokerConfig(allowlist_path=allowlist_file)
+    broker = BrokerDaemon(config)
+
+    drain_locked_states: list[bool] = []
+
+    class MockWriter:
+        def __init__(self) -> None:
+            self.written_bytes = bytearray()
+
+        def write(self, data: bytes) -> None:
+            self.written_bytes.extend(data)
+
+        async def drain(self) -> None:
+            drain_locked_states.append(broker._companion_ipc_mutex.locked())
+
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    writer = MockWriter()
+
+    # Test hello handshake
+    hello_payload = json.dumps({"type": "hello"}).encode("utf-8")
+    hello_frame = struct.pack(">I", len(hello_payload)) + hello_payload
+
+    # Test ping frame
+    ping_payload = json.dumps({"type": "HEARTBEAT_PING", "requestId": "req-999"}).encode("utf-8")
+    ping_frame = struct.pack(">I", len(ping_payload)) + ping_payload
+
+    mock_reader = asyncio.StreamReader()
+    mock_reader.feed_data(hello_frame + ping_frame)
+    mock_reader.feed_eof()
+
+    await broker.handle_ipc_connection(mock_reader, cast(Any, writer))
+
+    assert len(drain_locked_states) == 2
+    assert drain_locked_states == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_handle_query_notebook_confirmed_replay_cache_validation(broker: BrokerDaemon) -> None:
+    """Ensures confirmed query replay strictly verifies cached entry and rejects corrupted cache without stubs."""
+    from mcp_gateway.schemas.error import REQUEST_KEY_CONFLICT
+    from mcp_gateway.storage.journal import MutationState, OperationType
+
+    sel = await broker.dispatch({"action": "select_notebook", "notebook_id": "nb-allowed-1"})
+    assert sel["ok"] is True
+
+    req_key = "req-query-cache-test-1"
+
+    # 1. Prepare and confirm mutation in journal
+    broker.journal.prepare(
+        request_key=req_key,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.QUERY_NOTEBOOK,
+        args={"action": "query_notebook", "notebook_id": "nb-allowed-1", "question": "What is AI?", "request_key": req_key},
+        capability_secret=broker.config.capability_secret,
+    )
+    broker.journal.transition(req_key, MutationState.SENT)
+    broker.journal.transition(req_key, MutationState.CONFIRMED)
+
+    # 2. Replay with missing query_cache returns REQUEST_KEY_CONFLICT, NOT {citations: []}
+    res_missing = await broker.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-allowed-1",
+        "question": "What is AI?",
+        "request_key": req_key,
+    })
+    assert res_missing["ok"] is False
+    assert res_missing["error"]["code"] == REQUEST_KEY_CONFLICT
+    assert "cache entry is missing or mismatched" in res_missing["error"]["message"]
+
+    # 3. Save matching cache entry
+    broker.journal.put_query_cache(
+        cache_key=req_key,
+        notebook_id="nb-allowed-1",
+        query_text="What is AI?",
+        response_payload=json.dumps({"answer": "AI is artificial intelligence.", "citations": ["doc-1"]}),
+    )
+
+    # Replay with matching key & args succeeds from cache
+    res_cached = await broker.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-allowed-1",
+        "question": "What is AI?",
+        "request_key": req_key,
+    })
+    assert res_cached["ok"] is True
+    assert res_cached["cached"] is True
+    assert res_cached["answer"] == "AI is artificial intelligence."
+    assert res_cached["citations"] == ["doc-1"]
+
+    # 4. Replay with conflicting question returns REQUEST_KEY_CONFLICT
+    res_conflict = await broker.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-allowed-1",
+        "question": "What is Machine Learning?",
+        "request_key": req_key,
+    })
+    assert res_conflict["ok"] is False
+    assert res_conflict["error"]["code"] == REQUEST_KEY_CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_mutation_handlers_detect_conflicting_parameters(broker: BrokerDaemon) -> None:
+    """Verifies add_source, create_note, delete_note reject reused idempotency keys with different arguments."""
+    from mcp_gateway.schemas.error import REQUEST_KEY_CONFLICT
+    from mcp_gateway.storage.journal import OperationType
+
+    sel = await broker.dispatch({"action": "select_notebook", "notebook_id": "nb-allowed-1"})
+    assert sel["ok"] is True
+
+    # Conflicting add_source
+    k1 = "idem-src-1"
+    broker.journal.prepare(
+        request_key=k1,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.ADD_SOURCE,
+        args={"action": "add_source", "notebook_id": "nb-allowed-1", "idempotency_key": k1, "source": {"type": "text", "title": "A", "content": "1"}},
+        capability_secret=broker.config.capability_secret,
+    )
+    # Attempt same key on different notebook via direct handler
+    res_nb_diff = await broker._handle_add_source({
+        "notebook_id": "nb-allowed-2",
+        "idempotency_key": k1,
+        "source": {"type": "text", "title": "A", "content": "1"},
+    })
+    assert res_nb_diff["ok"] is False
+    assert res_nb_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+    # Attempt same key with conflicting payload via dispatch
+    res_payload_diff = await broker.dispatch({
+        "action": "add_source",
+        "notebook_id": "nb-allowed-1",
+        "idempotency_key": k1,
+        "source": {"type": "text", "title": "A", "content": "DIFFERENT"},
+    })
+    assert res_payload_diff["ok"] is False
+    assert res_payload_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+    # Conflicting create_note
+    k2 = "idem-note-1"
+    broker.journal.prepare(
+        request_key=k2,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.CREATE_NOTE,
+        args={"action": "create_note", "notebook_id": "nb-allowed-1", "idempotency_key": k2, "title": "T1", "content": "C1"},
+        capability_secret=broker.config.capability_secret,
+    )
+    res_note_diff = await broker.dispatch({
+        "action": "create_note",
+        "notebook_id": "nb-allowed-1",
+        "idempotency_key": k2,
+        "title": "T2",
+        "content": "C2",
+    })
+    assert res_note_diff["ok"] is False
+    assert res_note_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+    # Conflicting delete_note
+    k3 = "idem-del-1"
+    broker.journal.prepare(
+        request_key=k3,
+        notebook_id="nb-allowed-1",
+        operation_type=OperationType.DELETE_NOTE,
+        args={"action": "delete_note", "notebook_id": "nb-allowed-1", "idempotency_key": k3, "note_id": "note-1"},
+        capability_secret=broker.config.capability_secret,
+    )
+    res_del_diff = await broker.dispatch({
+        "action": "delete_note",
+        "notebook_id": "nb-allowed-1",
+        "idempotency_key": k3,
+        "note_id": "note-2",
+    })
+    assert res_del_diff["ok"] is False
+    assert res_del_diff["error"]["code"] == REQUEST_KEY_CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_update_allowlist_preserves_legacy_ids_unless_manual(broker: BrokerDaemon) -> None:
+    # 1. Update allowlist with legacy non-UUID notebook ID (without manual: true) passes
+    res_legacy = await broker.dispatch({
+        "action": "update_allowlist",
+        "notebooks": {
+            "legacy-nb-custom-1": {"title": "Legacy Notebook", "mode": "READ_ONLY"},
+        },
+    })
+    assert res_legacy["ok"] is True
+    assert "legacy-nb-custom-1" in broker.allowlist_config.notebook_permissions
+
+    # 2. Update allowlist with legacy non-UUID notebook ID with manual: true fails
+    res_manual_bad = await broker.dispatch({
+        "action": "update_allowlist",
+        "notebooks": {
+            "legacy-nb-custom-2": {"title": "Manual Non-UUID", "mode": "READ_ONLY", "manual": True},
+        },
+    })
+    assert res_manual_bad["ok"] is False
+    assert res_manual_bad["error"]["code"] == "INVALID_ARGUMENT"

@@ -62,9 +62,20 @@ class MutationRecord:
     updated_at: str
 
 
+TRANSIENT_PAYLOAD_KEYS: frozenset[str] = frozenset({
+    "session_token",
+    "timeout_seconds",
+    "request_key",
+    "idempotency_key",
+    "_meta",
+    "traceparent",
+})
+
+
 def compute_payload_hash(args: dict[str, Any], capability_secret: bytes) -> str:
-    """Computes a deterministic HMAC-SHA256 digest of canonicalized JSON arguments."""
-    canonical = json.dumps(args, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    """Computes a deterministic HMAC-SHA256 digest of canonicalized JSON arguments with transient keys stripped."""
+    clean_args = {k: v for k, v in args.items() if k not in TRANSIENT_PAYLOAD_KEYS}
+    canonical = json.dumps(clean_args, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hmac.new(capability_secret, canonical, hashlib.sha256).hexdigest()
 
 
@@ -132,6 +143,21 @@ class MutationJournal:
                 with self._conn:
                     self._conn.execute("PRAGMA user_version = 2;")
 
+        if current_version < 3:
+            with self._conn:
+                self._conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS query_cache (
+                        cache_key TEXT PRIMARY KEY,
+                        notebook_id TEXT NOT NULL,
+                        query_text TEXT NOT NULL,
+                        response_payload TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    PRAGMA user_version = 3;
+                    """
+                )
+
     def close(self) -> None:
         self._conn.close()
 
@@ -186,6 +212,20 @@ class MutationJournal:
                 existing = cursor.fetchone()
                 if existing is not None:
                     record = self._row_to_record(existing)
+                    if record.notebook_id != notebook_id:
+                        raise ValueError(
+                            f"Request key conflict for {request_key!r}: notebook_id mismatch "
+                            f"({record.notebook_id!r} != {notebook_id!r})."
+                        )
+                    if record.operation_type != operation_type:
+                        raise ValueError(
+                            f"Request key conflict for {request_key!r}: operation_type mismatch "
+                            f"({record.operation_type.value!r} != {operation_type.value!r})."
+                        )
+                    if record.payload_hash != payload_hash:
+                        raise ValueError(
+                            f"Request key conflict for {request_key!r}: payload_hash mismatch."
+                        )
                     if record.state == MutationState.REJECTED:
                         raise ValueError(
                             f"Mutation with request_key {request_key!r} was previously rejected."
@@ -340,3 +380,47 @@ class MutationJournal:
             assigned_source_id=assigned_source_id,
             detail=detail or f"Reconciled to {target_state.value}",
         )
+
+    def put_query_cache(
+        self,
+        cache_key: str,
+        notebook_id: str,
+        query_text: str,
+        response_payload: str,
+    ) -> None:
+        """Stores or updates a confirmed query_notebook response in the dedicated query_cache table."""
+        def _do_put() -> None:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO query_cache (
+                        cache_key, notebook_id, query_text, response_payload
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(cache_key) DO UPDATE SET
+                        notebook_id = excluded.notebook_id,
+                        query_text = excluded.query_text,
+                        response_payload = excluded.response_payload,
+                        created_at = CURRENT_TIMESTAMP
+                    """,
+                    (cache_key, notebook_id, query_text, response_payload),
+                )
+
+        self._execute_with_busy_retry(_do_put)
+
+    def get_query_cache(self, cache_key: str) -> dict[str, Any] | None:
+        """Retrieves a cached query_notebook payload by cache_key, or None if absent."""
+        cursor = self._conn.execute(
+            "SELECT cache_key, notebook_id, query_text, response_payload, created_at "
+            "FROM query_cache WHERE cache_key = ?",
+            (cache_key,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "cache_key": str(row["cache_key"]),
+            "notebook_id": str(row["notebook_id"]),
+            "query_text": str(row["query_text"]),
+            "response_payload": str(row["response_payload"]),
+            "created_at": str(row["created_at"]) if row["created_at"] is not None else "",
+        }

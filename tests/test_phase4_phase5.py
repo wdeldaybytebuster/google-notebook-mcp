@@ -11,27 +11,18 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 import pytest
 
-from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon, McpFacade
+from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon
 from mcp_gateway.broker.session import SessionState
 from mcp_gateway.engine.readiness_poller import (
     SourceStatus,
-    parse_source_status,
     poll_until_ready,
 )
 from mcp_gateway.schemas.error import (
     ALLOWLIST_DENIED,
-    INTERNAL,
-    INVALID_ARGUMENT,
     MUTATION_UNKNOWN,
     make_error,
 )
 from mcp_gateway.schemas.tools import (
-    ADD_SOURCE_SCHEMA,
-    GET_NOTEBOOK_METADATA_SCHEMA,
-    LIST_NOTEBOOKS_SCHEMA,
-    LIST_SOURCES_SCHEMA,
-    QUERY_NOTEBOOK_SCHEMA,
-    SELECT_NOTEBOOK_SCHEMA,
     AddSourceInput,
     GetNotebookMetadataInput,
     ListNotebooksInput,
