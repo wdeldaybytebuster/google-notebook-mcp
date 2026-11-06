@@ -56,13 +56,12 @@ def parse_and_validate_notebook_id(raw_input: str) -> str:
     if ".." in candidate or "%2e" in lowered_raw or "\\" in candidate:
         raise ValueError("Invalid notebook ID: path traversal characters are not permitted.")
 
-    if (
-        "://" in candidate
-        or lowered_raw.startswith("notebook.google.com")
-        or lowered_raw.startswith("notebooklm.google.com")
-    ):
-        url_str = candidate if "://" in candidate else f"https://{candidate}"
-        parsed = urlparse(url_str)
+    has_scheme = "://" in candidate
+    url_str = candidate if has_scheme else f"https://{candidate}"
+    parsed = urlparse(url_str)
+    should_parse_as_url = has_scheme or bool(parsed.netloc)
+
+    if should_parse_as_url:
         if parsed.scheme not in ("https", "http") or parsed.hostname not in ALLOWED_NOTEBOOK_HOSTS:
             raise ValueError(
                 f"Invalid notebook ID: URL host {parsed.hostname!r} is not notebook.google.com."
