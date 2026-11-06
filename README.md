@@ -92,7 +92,11 @@ Run the autonomous onboarding orchestrator directly from the repository root:
 git clone https://github.com/wdeldaybytebuster/google-notebook-mcp.git
 cd google-notebook-mcp
 
-# Run the 6-stage autonomous onboarding wizard
+# 1. Install dependencies (pip or uv)
+pip install -e .
+# or: uv sync
+
+# 2. Run the 6-stage autonomous onboarding wizard
 python3 install_and_onboard.py
 
 # Or via the CLI if installed:

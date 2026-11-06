@@ -1305,6 +1305,27 @@ def interactive_allowlist_seeding(
 # ---------------------------------------------------------------------------
 
 
+def ensure_dependencies_installed(root: Path, python_exe: str) -> None:
+    """Verifies gateway dependencies (mcp, pydantic, websockets) are installed, auto-installing if missing."""
+    check_cmd = [
+        python_exe,
+        "-c",
+        "import mcp; import pydantic; import websockets",
+    ]
+    res = subprocess.run(check_cmd, capture_output=True, text=True, check=False)
+    if res.returncode == 0:
+        return
+
+    print("[*] Gateway dependencies not detected. Auto-installing in editable mode...")
+    install_cmd = [python_exe, "-m", "pip", "install", "-e", str(root)]
+    res_install = subprocess.run(install_cmd, capture_output=True, text=True, check=False)
+    if res_install.returncode == 0:
+        print("[+] Gateway dependencies installed successfully.")
+    elif shutil.which("uv"):
+        print("[*] Retrying dependency installation via uv...")
+        subprocess.run(["uv", "pip", "install", "-e", str(root)], capture_output=True, text=True, check=False)
+
+
 def run_onboarding(
     project_root: Path | None = None,
     preferred_browser: str | None = None,
@@ -1363,8 +1384,13 @@ def run_onboarding(
     )
 
     # Stage 3: Broker daemon & Browser launch
-    venv_python = root / ".venv" / "bin" / "python"
+    if platform.system() == "Windows":
+        venv_python = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = root / ".venv" / "bin" / "python"
     python_exe = str(venv_python if venv_python.exists() else Path(sys.executable).resolve())
+
+    ensure_dependencies_installed(root, python_exe)
 
     if not is_socket_live(resolved_socket_path):
         print("[*] Starting background Policy & Session Broker daemon...")
@@ -1487,9 +1513,13 @@ def run_onboarding(
     print("\n=========================================================================")
     print(" INSTALLATION & ONBOARDING COMPLETE!")
     print("=========================================================================")
-    print(" Connect your AI coding clients (Claude Code, Cursor, Windsurf, Antigravity)")
+    print(" Connect your AI coding clients (Claude Code, Claude Desktop, Cursor, Windsurf, Antigravity)")
     print(" using the standard stdio MCP command:")
     print(f'   uv --directory "{root}" run gemini-notebook-mcp mcp')
+    print(" Or with direct Python:")
+    print(f'   {python_exe} -m mcp_gateway.cli mcp')
+    print(" For Claude Desktop, paste the config into claude_desktop_config.json:")
+    print(" (See docs/client-configuration.md for full examples)")
     print("=========================================================================")
     return 0
 
