@@ -175,6 +175,21 @@ TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
         "destructiveHint": True,
         "idempotentHint": True,
     },
+    "list_artifacts": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
+    "get_artifact_metadata": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
+    "extract_artifact": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+    },
 }
 
 CREATE_NOTE_SCHEMA: dict[str, Any] = {
@@ -266,6 +281,66 @@ SELECT_NOTEBOOK_SCHEMA: dict[str, Any] = {
     ],
 }
 
+LIST_ARTIFACTS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["notebook_id"],
+    "properties": {
+        "notebook_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "artifact_type_filter": {
+            "type": "string",
+        },
+        "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+        },
+        "cursor": {
+            "type": "string",
+        },
+    },
+}
+
+GET_ARTIFACT_METADATA_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["notebook_id", "artifact_id"],
+    "properties": {
+        "notebook_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "artifact_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+    },
+}
+
+EXTRACT_ARTIFACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["notebook_id", "artifact_id"],
+    "properties": {
+        "notebook_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "artifact_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "output_format": {
+            "type": "string",
+            "default": "MARKDOWN",
+        },
+    },
+}
+
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "list_notebooks": LIST_NOTEBOOKS_SCHEMA,
     "select_notebook": SELECT_NOTEBOOK_SCHEMA,
@@ -276,6 +351,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "create_note": CREATE_NOTE_SCHEMA,
     "list_notes": LIST_NOTES_SCHEMA,
     "delete_note": DELETE_NOTE_SCHEMA,
+    "list_artifacts": LIST_ARTIFACTS_SCHEMA,
+    "get_artifact_metadata": GET_ARTIFACT_METADATA_SCHEMA,
+    "extract_artifact": EXTRACT_ARTIFACT_SCHEMA,
 }
 
 
@@ -411,6 +489,36 @@ class DeleteNoteInput(BaseModel):
     idempotency_key: str = Field(min_length=1)
 
 
+class ListArtifactsInput(BaseModel):
+    """Pydantic schema for list_artifacts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notebook_id: str = Field(min_length=1)
+    artifact_type_filter: str | None = None
+    page_size: int = Field(default=20, ge=1, le=100)
+    cursor: str | None = None
+
+
+class GetArtifactMetadataInput(BaseModel):
+    """Pydantic schema for get_artifact_metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notebook_id: str = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+
+
+class ExtractArtifactInput(BaseModel):
+    """Pydantic schema for extract_artifact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notebook_id: str = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+    output_format: str = Field(default="MARKDOWN")
+
+
 PYDANTIC_TOOL_MODELS: dict[str, type[BaseModel]] = {
     "list_notebooks": ListNotebooksInput,
     "get_notebook_metadata": GetNotebookMetadataInput,
@@ -421,5 +529,8 @@ PYDANTIC_TOOL_MODELS: dict[str, type[BaseModel]] = {
     "create_note": CreateNoteInput,
     "list_notes": ListNotesInput,
     "delete_note": DeleteNoteInput,
+    "list_artifacts": ListArtifactsInput,
+    "get_artifact_metadata": GetArtifactMetadataInput,
+    "extract_artifact": ExtractArtifactInput,
 }
 

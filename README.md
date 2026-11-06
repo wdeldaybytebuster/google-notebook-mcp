@@ -73,7 +73,8 @@ flowchart TD
 
 ## Key Features
 
-- **9 Production MCP Tools**: Grounded natural-language Q&A with Unicode citation spans, source cataloging, note creation/listing/deletion, and file ingestion.
+- **12 Production MCP Tools**: Grounded natural-language Q&A with Unicode citation spans, source cataloging, note creation/listing/deletion, binary file ingestion via Scotty, and studio artifact querying/metadata/extraction.
+- **MCP 2025/2026 Protocol Standardization**: First-class MCP resources (`notebooklm://`), parameter-validated prompt templates (`prompts/*`), live progress notifications (`notifications/progress`), and standardized behavioral tool annotations (`readOnlyHint`, `idempotentHint`).
 - **ADR-011 Interactive Session Lock**: Enforces single-notebook locking per session, preventing accidental cross-notebook queries or modifications.
 - **Project Directory Binding (`.notebook_mcp.json`)**: Seamlessly binds local workspaces to their designated NotebookLM notebook with an interactive in-chat confirmation handshake.
 - **Scotty 3-Step Resumable Uploads**: Upload PDFs, Markdown, Word documents, and text files directly into NotebookLM with automatic offset resumption and $\le 512\text{ KiB}$ IPC slicing.
@@ -266,6 +267,17 @@ claude mcp add gemini-notebook uv -- --directory /ABSOLUTE/PATH/TO/google-notebo
 | `create_note` | Write | `title`, `content`, `idempotency_key` | Creates a new user note journaled in SQLite. |
 | `list_notes` | Read | `page_size`, `cursor` | Returns user notes with upstream schema anomaly detection. |
 | `delete_note` | Write | `note_id`, `idempotency_key` | Deletes a user note by ID with pre-flight identity assertion. |
+| `list_artifacts` | Read | `artifact_type`, `page_size`, `cursor` | Lists generated studio artifacts (audio overviews, study guides, mind maps, briefings). |
+| `get_artifact_metadata` | Read | `artifact_id` | Fetches generation parameters, readiness state, duration, and download URI. |
+| `extract_artifact` | Write/Export | `artifact_id`, `destination_path` | Streams artifact to tmpfs/disk in $\le 512\text{ KiB}$ chunks returning `FILE_PATH`. |
+
+### MCP 2025/2026 Protocol Capabilities
+
+In addition to tools, the gateway natively implements the modern MCP standard:
+- **Resources (`resources/*`)**: Browse notebook contents using standard URIs: `notebooklm://notebooks/{nb_id}/{metadata|sources|notes|artifacts}[/{item_id}]`. Protected by Invariant 3 Universal Security Interceptor Gate.
+- **Prompts (`prompts/*`)**: Ready-to-use prompt templates (`synthesize_sources`, `generate_study_guide`, `extract_action_items`, `adversarial_audit`) for AI coding agents.
+- **Progress Notifications (`notifications/progress`)**: Out-of-band progress tracking for Scotty byte streaming and readiness polling.
+- **Logging (`logging/setLevel`)**: Client-controllable diagnostic logging without stdio frame pollution.
 
 *Full schema parameters and error envelopes are documented in the [Tools Reference](docs/tools-reference.md).*
 

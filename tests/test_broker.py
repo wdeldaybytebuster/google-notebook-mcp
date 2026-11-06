@@ -31,7 +31,10 @@ from mcp_gateway.schemas.tools import (
     ADD_SOURCE_SCHEMA,
     CREATE_NOTE_SCHEMA,
     DELETE_NOTE_SCHEMA,
+    EXTRACT_ARTIFACT_SCHEMA,
+    GET_ARTIFACT_METADATA_SCHEMA,
     GET_NOTEBOOK_METADATA_SCHEMA,
+    LIST_ARTIFACTS_SCHEMA,
     LIST_NOTEBOOKS_SCHEMA,
     LIST_NOTES_SCHEMA,
     LIST_SOURCES_SCHEMA,
@@ -247,7 +250,7 @@ def test_failure_envelope() -> None:
     assert d["error"]["retryable"] is False
 
 
-def test_nine_tool_schemas_and_annotations() -> None:
+def test_twelve_tool_schemas_and_annotations() -> None:
     schemas = [
         LIST_NOTEBOOKS_SCHEMA,
         SELECT_NOTEBOOK_SCHEMA,
@@ -258,21 +261,25 @@ def test_nine_tool_schemas_and_annotations() -> None:
         CREATE_NOTE_SCHEMA,
         LIST_NOTES_SCHEMA,
         DELETE_NOTE_SCHEMA,
+        LIST_ARTIFACTS_SCHEMA,
+        GET_ARTIFACT_METADATA_SCHEMA,
+        EXTRACT_ARTIFACT_SCHEMA,
     ]
-    assert len(schemas) == 9
+    assert len(schemas) == 12
     for s in schemas:
         assert s["additionalProperties"] is False
         assert s["type"] == "object"
 
-    assert len(TOOL_ANNOTATIONS) == 9
+    assert len(TOOL_ANNOTATIONS) == 12
     for tool_name, hints in TOOL_ANNOTATIONS.items():
         assert "readOnlyHint" in hints
         assert "destructiveHint" in hints
         assert "idempotentHint" in hints
 
 
-# Backward compatibility alias
-test_five_tool_schemas_and_annotations = test_nine_tool_schemas_and_annotations
+# Backward compatibility aliases
+test_nine_tool_schemas_and_annotations = test_twelve_tool_schemas_and_annotations
+test_five_tool_schemas_and_annotations = test_twelve_tool_schemas_and_annotations
 
 
 @pytest.mark.asyncio
@@ -344,6 +351,9 @@ async def test_mcp_facade_integration(broker: BrokerDaemon) -> None:
         "create_note",
         "list_notes",
         "delete_note",
+        "list_artifacts",
+        "get_artifact_metadata",
+        "extract_artifact",
     ]
     for t in list_res.tools:
         assert t.annotations is not None

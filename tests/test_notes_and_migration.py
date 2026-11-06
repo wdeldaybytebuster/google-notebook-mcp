@@ -472,7 +472,10 @@ async def test_mcp_facade_note_tools_registration(mock_broker: BrokerDaemon) -> 
     assert "create_note" in tool_names
     assert "list_notes" in tool_names
     assert "delete_note" in tool_names
-    assert len(tool_names) == 9
+    assert "list_artifacts" in tool_names
+    assert "get_artifact_metadata" in tool_names
+    assert "extract_artifact" in tool_names
+    assert len(tool_names) == 12
 
     # Test call_tool_handler rejects extra properties (closed schema) and propagates correlation ID
     call_entry = facade.server._request_handlers.get("tools/call")

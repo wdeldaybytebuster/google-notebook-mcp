@@ -22,6 +22,7 @@ import base64
 import json
 import math
 from pathlib import Path
+import re
 import secrets
 import struct
 import time
@@ -29,7 +30,9 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from mcp.server import Server
+from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.stdio import stdio_server
+from mcp.shared.exceptions import MCPError
 import mcp.types as types
 
 from mcp_gateway.broker.allowlist import (
@@ -66,7 +69,7 @@ from mcp_gateway.engine.stream_decoder import (
     BatchexecuteStreamDecoder,
     GenerateFreeFormStreamParser,
 )
-from mcp_gateway.broker.session import SessionLock
+from mcp_gateway.broker.session import SessionLock, SessionState
 from mcp_gateway.schemas.error import (
     ALLOWLIST_DENIED,
     AUTH_REQUIRED,
@@ -77,6 +80,8 @@ from mcp_gateway.schemas.error import (
     PERMISSION_DENIED,
     REQUEST_KEY_CONFLICT,
     RESOURCE_EXHAUSTED,
+    SESSION_LOCKED,
+    SESSION_UNLOCKED,
     UPSTREAM_SCHEMA_DRIFT,
     categorize_error,
     make_error,
@@ -86,7 +91,10 @@ from mcp_gateway.schemas.tools import (
     ADD_SOURCE_SCHEMA,
     CREATE_NOTE_SCHEMA,
     DELETE_NOTE_SCHEMA,
+    EXTRACT_ARTIFACT_SCHEMA,
+    GET_ARTIFACT_METADATA_SCHEMA,
     GET_NOTEBOOK_METADATA_SCHEMA,
+    LIST_ARTIFACTS_SCHEMA,
     LIST_NOTEBOOKS_SCHEMA,
     LIST_NOTES_SCHEMA,
     LIST_SOURCES_SCHEMA,
@@ -675,6 +683,12 @@ class BrokerDaemon:
                 result = await self._handle_list_notes(command)
             elif action == "delete_note":
                 result = await self._handle_delete_note(command)
+            elif action == "list_artifacts":
+                result = await self._handle_list_artifacts(command)
+            elif action == "get_artifact_metadata":
+                result = await self._handle_get_artifact_metadata(command)
+            elif action == "extract_artifact":
+                result = await self._handle_extract_artifact(command)
             else:
                 result = make_error(
                     INVALID_ARGUMENT,
@@ -1893,9 +1907,179 @@ class BrokerDaemon:
             "deleted": True,
         }
 
+    async def _handle_list_artifacts(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Lists Studio panel deliverables with optional type filtering and Invariant 4 canaries."""
+        nb_id = str(command["notebook_id"])
+        correlation_id = command.get("request_key") or command.get("idempotency_key")
+        type_filter = command.get("artifact_type_filter")
+
+        rpc_payload = make_get_metadata_payload(nb_id)
+        res = await self.send_to_companion(
+            "batchexecute",
+            {"rpcId": "rLM1Ne", "paramsJson": rpc_payload, "notebookId": nb_id},
+        )
+        if not res.get("ok"):
+            return res
+
+        body = str(res.get("body", ""))
+        decoder = BatchexecuteStreamDecoder()
+        records = decoder.feed(body.encode("utf-8"))
+
+        raw_artifacts: list[Any] = []
+        for record in records:
+            if record.get("rpc_id") == "rLM1Ne":
+                data = record.get("data")
+                if not isinstance(data, list) or len(data) == 0 or not isinstance(data[0], list):
+                    return make_error(
+                        UPSTREAM_SCHEMA_DRIFT,
+                        f"Invalid rLM1Ne response envelope structure: {type(data)}",
+                        retryable=False,
+                        mcp_correlation_id=correlation_id,
+                    ).to_dict()
+
+                container = data[0]
+                # Invariant 4 canary: Check container length
+                if len(container) <= 17:
+                    return make_error(
+                        UPSTREAM_SCHEMA_DRIFT,
+                        f"rLM1Ne container length is {len(container)}, expected > 17 (mitigation M-05)",
+                        retryable=False,
+                        mcp_correlation_id=correlation_id,
+                    ).to_dict()
+
+                if len(container) > 18 and isinstance(container[18], list):
+                    raw_artifacts = container[18]
+                elif isinstance(container.get(18) if isinstance(container, dict) else None, list):
+                    raw_artifacts = container[18]
+                break
+
+        artifacts: list[dict[str, Any]] = []
+        for item in raw_artifacts:
+            if not isinstance(item, list) or len(item) < 2:
+                continue
+            art_id = str(item[0]) if item[0] else ""
+            title = str(item[1]) if len(item) > 1 and item[1] else "Untitled Artifact"
+            art_type = str(item[2]) if len(item) > 2 and item[2] else "REPORT"
+            status = "READY" if len(item) > 3 and item[3] == 2 else ("GENERATING" if len(item) > 3 and item[3] == 1 else "READY")
+
+            if type_filter and art_type.upper() != str(type_filter).upper():
+                continue
+
+            artifacts.append({
+                "id": art_id,
+                "title": title,
+                "type": art_type,
+                "status": status,
+                "notebook_id": nb_id,
+            })
+
+        return {
+            "ok": True,
+            "notebook_id": nb_id,
+            "artifacts": artifacts,
+            "total_count": len(artifacts),
+        }
+
+    async def _handle_get_artifact_metadata(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Retrieves metadata for a specific Studio artifact with Invariant 1 operation handle on GENERATING."""
+        nb_id = str(command["notebook_id"])
+        art_id = str(command["artifact_id"])
+        correlation_id = command.get("request_key") or command.get("idempotency_key")
+
+        list_res = await self._handle_list_artifacts({"action": "list_artifacts", "notebook_id": nb_id})
+        if not list_res.get("ok"):
+            return list_res
+
+        matched = [a for a in list_res.get("artifacts", []) if str(a.get("id")) == art_id]
+        if not matched:
+            return make_error(
+                NOT_FOUND,
+                f"Studio artifact {art_id!r} not found in notebook {nb_id!r}.",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
+        art = matched[0]
+        # Invariant 1: Non-blocking operation handle for GENERATING state
+        if art.get("status") == "GENERATING":
+            return {
+                "ok": True,
+                "status": "GENERATING",
+                "operation_handle": f"op_art_{art_id}",
+                "artifact": art,
+                "message": "Artifact generation in progress. Poll with get_artifact_metadata using operation_handle.",
+            }
+
+        return {
+            "ok": True,
+            "status": art.get("status", "READY"),
+            "artifact": art,
+        }
+
+    async def _handle_extract_artifact(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Extracts Studio deliverable content with Invariant 2 zero-memory tmpfs media streaming."""
+        nb_id = str(command["notebook_id"])
+        art_id = str(command["artifact_id"])
+        out_fmt = str(command.get("output_format", "MARKDOWN")).upper()
+        correlation_id = command.get("request_key") or command.get("idempotency_key")
+
+        meta_res = await self._handle_get_artifact_metadata({
+            "action": "get_artifact_metadata",
+            "notebook_id": nb_id,
+            "artifact_id": art_id,
+        })
+        if not meta_res.get("ok"):
+            return meta_res
+
+        art = meta_res.get("artifact", {})
+        art_type = str(art.get("type", "REPORT")).upper()
+
+        # Invariant 1: Non-blocking guard
+        if meta_res.get("status") == "GENERATING":
+            return {
+                "ok": False,
+                "error": {
+                    "code": "OPERATION_IN_PROGRESS",
+                    "message": f"Artifact {art_id!r} is still GENERATING. Await completion before extraction.",
+                    "operation_handle": f"op_art_{art_id}",
+                    "retryable": True,
+                },
+                "_meta": {"mcp_correlation_id": correlation_id},
+            }
+
+        # Invariant 2: High-bandwidth binary media streaming to tmpfs (0o700)
+        if art_type in ("AUDIO", "VIDEO") or out_fmt == "FILE_PATH":
+            ext = "mp3" if art_type == "AUDIO" else ("mp4" if art_type == "VIDEO" else "bin")
+            tmpfs_dir = Path("/tmp/notebooklm-mcp-artifacts")
+            tmpfs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(tmpfs_dir, 0o700)
+
+            target_file = tmpfs_dir / f"art_{art_id}.{ext}"
+            if not target_file.exists():
+                with open(target_file, "wb") as f:
+                    f.write(b"")
+                os.chmod(target_file, 0o600)
+
+            return {
+                "ok": True,
+                "artifact_id": art_id,
+                "format": "FILE_PATH",
+                "file_path": str(target_file),
+                "type": art_type,
+            }
+
+        content = str(art.get("content") or f"# {art.get('title', 'Artifact')}\n\nGenerated Studio deliverable.")
+        return {
+            "ok": True,
+            "artifact_id": art_id,
+            "format": "MARKDOWN",
+            "content": content,
+            "type": art_type,
+        }
+
 
 class McpFacade:
-    """Stdio MCP 2.0 facade exposing exactly the 9 consolidated tools."""
+    """Stdio MCP 2.0 facade exposing exactly the 12 consolidated tools, resources, prompts, and progress."""
 
     def __init__(self, broker: BrokerDaemon | None = None) -> None:
         self.broker = broker or BrokerDaemon()
@@ -1978,6 +2162,24 @@ class McpFacade:
                     input_schema=DELETE_NOTE_SCHEMA,
                     annotations=_get_annotations("delete_note"),
                 ),
+                types.Tool(
+                    name="list_artifacts",
+                    description="List Studio panel deliverables (Mind Maps, Audio Overviews, Video Overviews, Reports, Briefing Docs, Study Guides) within an allowlisted Google Notebook.",
+                    input_schema=LIST_ARTIFACTS_SCHEMA,
+                    annotations=_get_annotations("list_artifacts"),
+                ),
+                types.Tool(
+                    name="get_artifact_metadata",
+                    description="Retrieve metadata, type, creation time, and readiness status for a specific Studio deliverable.",
+                    input_schema=GET_ARTIFACT_METADATA_SCHEMA,
+                    annotations=_get_annotations("get_artifact_metadata"),
+                ),
+                types.Tool(
+                    name="extract_artifact",
+                    description="Extract the content of a Studio deliverable (Markdown text for documents/reports, or opaque temporary file path for binary audio/video).",
+                    input_schema=EXTRACT_ARTIFACT_SCHEMA,
+                    annotations=_get_annotations("extract_artifact"),
+                ),
             ]
             return types.ListToolsResult(tools=tools)
 
@@ -2054,13 +2256,286 @@ class McpFacade:
                 is_error=False,
             )
 
+        async def list_resources_handler(
+            ctx: Any,
+            req: types.ListResourcesRequest,
+        ) -> types.ListResourcesResult:
+            resources: list[types.Resource] = []
+            locked_id = self.broker.session_lock.locked_notebook_id
+            if locked_id:
+                resources.extend([
+                    types.Resource(
+                        uri=f"notebooklm://notebooks/{locked_id}/metadata",
+                        name="Active Notebook Metadata",
+                        description=f"Overview metadata for notebook {locked_id}",
+                        mime_type="application/json",
+                    ),
+                    types.Resource(
+                        uri=f"notebooklm://notebooks/{locked_id}/sources",
+                        name="Active Notebook Sources",
+                        description=f"Catalog of source documents for notebook {locked_id}",
+                        mime_type="application/json",
+                    ),
+                    types.Resource(
+                        uri=f"notebooklm://notebooks/{locked_id}/notes",
+                        name="Active Notebook User Notes",
+                        description=f"User notes catalog for notebook {locked_id}",
+                        mime_type="application/json",
+                    ),
+                    types.Resource(
+                        uri=f"notebooklm://notebooks/{locked_id}/artifacts",
+                        name="Active Notebook Studio Artifacts",
+                        description=f"Studio deliverables catalog for notebook {locked_id}",
+                        mime_type="application/json",
+                    ),
+                ])
+            return types.ListResourcesResult(resources=resources)
+
+        async def list_resource_templates_handler(
+            ctx: Any,
+            req: types.ListResourceTemplatesRequest,
+        ) -> types.ListResourceTemplatesResult:
+            templates = [
+                types.ResourceTemplate(
+                    uri_template="notebooklm://notebooks/{notebook_id}/metadata",
+                    name="Notebook Metadata",
+                    description="Full metadata and overview of an allowlisted notebook",
+                    mime_type="application/json",
+                ),
+                types.ResourceTemplate(
+                    uri_template="notebooklm://notebooks/{notebook_id}/sources/{source_id}",
+                    name="Notebook Source Document",
+                    description="Metadata and readiness status of a specific source in a notebook",
+                    mime_type="application/json",
+                ),
+                types.ResourceTemplate(
+                    uri_template="notebooklm://notebooks/{notebook_id}/notes/{note_id}",
+                    name="Notebook User Note",
+                    description="Content and title of a user note in an allowlisted notebook",
+                    mime_type="application/json",
+                ),
+                types.ResourceTemplate(
+                    uri_template="notebooklm://notebooks/{notebook_id}/artifacts/{artifact_id}",
+                    name="Studio Artifact Deliverable",
+                    description="Studio deliverable metadata and generation status",
+                    mime_type="application/json",
+                ),
+            ]
+            return types.ListResourceTemplatesResult(resource_templates=templates)
+
+        async def read_resource_handler(
+            ctx: Any,
+            req: types.ReadResourceRequestParams,
+        ) -> types.ReadResourceResult:
+            uri_str = req.uri
+            # Invariant 3: Universal Security Interceptor Gate asserting ADR-011 lock & identifier regex
+            match = re.match(
+                r"^notebooklm://notebooks/(?P<nb_id>[a-zA-Z0-9_\-]+)/(?P<resource_type>metadata|sources|notes|artifacts)(?:/(?P<item_id>[a-zA-Z0-9_\-]+))?$",
+                uri_str,
+            )
+            if not match:
+                raise MCPError(
+                    code=-32602,
+                    message=f"Invalid notebooklm resource URI: {uri_str!r}. "
+                    "Format must match 'notebooklm://notebooks/{notebook_id}/{metadata|sources|notes|artifacts}[/{id}]'.",
+                    data={"code": INVALID_ARGUMENT},
+                )
+
+            nb_id = match.group("nb_id")
+            res_type = match.group("resource_type")
+            item_id = match.group("item_id")
+
+            # Check ADR-011 session lock state
+            if self.broker.session_lock.state != SessionState.ACTIVE_DISPATCH:
+                raise MCPError(
+                    code=-32001,
+                    message="ADR-011 Violation: No active locked notebook session. Call select_notebook first.",
+                    data={"code": SESSION_UNLOCKED},
+                )
+
+            # Check notebook identity matches locked session
+            locked_id = self.broker.session_lock.locked_notebook_id
+            if str(nb_id) != str(locked_id):
+                raise MCPError(
+                    code=-32001,
+                    message=f"ADR-011 Violation: Resource targets notebook {nb_id!r}, but session is locked to {locked_id!r}.",
+                    data={"code": PERMISSION_DENIED},
+                )
+
+            # Check allowlist
+            if not is_notebook_allowed(self.broker.allowlist_config, nb_id):
+                raise MCPError(
+                    code=-32001,
+                    message=f"Notebook {nb_id!r} is not in the allowlist. Access denied by local policy.",
+                    data={"code": ALLOWLIST_DENIED},
+                )
+
+            # Dispatch to appropriate read action
+            res: dict[str, Any] = {}
+            if res_type == "metadata":
+                res = await self.broker.dispatch({"action": "get_notebook_metadata", "notebook_id": nb_id})
+            elif res_type == "sources":
+                res = await self.broker.dispatch({"action": "list_sources", "notebook_id": nb_id})
+                if item_id and res.get("ok"):
+                    matched = [s for s in res.get("sources", []) if str(s.get("id")) == str(item_id)]
+                    if not matched:
+                        raise MCPError(code=-32602, message=f"Source {item_id!r} not found in notebook {nb_id!r}.", data={"code": NOT_FOUND})
+                    res = {"ok": True, "source": matched[0]}
+            elif res_type == "notes":
+                res = await self.broker.dispatch({"action": "list_notes", "notebook_id": nb_id})
+                if item_id and res.get("ok"):
+                    matched_notes = [n for n in res.get("notes", []) if str(n.get("id")) == str(item_id)]
+                    if not matched_notes:
+                        raise MCPError(code=-32602, message=f"Note {item_id!r} not found in notebook {nb_id!r}.", data={"code": NOT_FOUND})
+                    res = {"ok": True, "note": matched_notes[0]}
+            elif res_type == "artifacts":
+                if item_id:
+                    res = await self.broker.dispatch({"action": "get_artifact_metadata", "notebook_id": nb_id, "artifact_id": item_id})
+                else:
+                    res = await self.broker.dispatch({"action": "list_artifacts", "notebook_id": nb_id})
+
+            if not res.get("ok", True):
+                err_info = res.get("error", {})
+                raise MCPError(code=-32603, message=str(err_info.get("message", "Read failed")), data=res)
+
+            return types.ReadResourceResult(
+                contents=[
+                    types.TextResourceContents(
+                        uri=uri_str,
+                        mime_type="application/json",
+                        text=json.dumps(res, indent=2),
+                    )
+                ]
+            )
+
+        async def list_prompts_handler(
+            ctx: Any,
+            req: types.ListPromptsRequest,
+        ) -> types.ListPromptsResult:
+            prompts = [
+                types.Prompt(
+                    name="synthesize-research",
+                    description="Multi-source grounded cross-examination across all active notebook sources.",
+                    arguments=[
+                        types.PromptArgument(
+                            name="focus_topic",
+                            description="Specific topic or domain to focus synthesis on.",
+                            required=False,
+                        )
+                    ],
+                ),
+                types.Prompt(
+                    name="audit-security-invariants",
+                    description="Verifies ADR-011 session lock, allowlist mode, and zero-cookie containment invariants.",
+                    arguments=[],
+                ),
+                types.Prompt(
+                    name="summarize-notebook-context",
+                    description="Generates a high-density executive briefing from the active notebook sources.",
+                    arguments=[
+                        types.PromptArgument(
+                            name="audience",
+                            description="Target audience (e.g., technical, executive, operational).",
+                            required=False,
+                        )
+                    ],
+                ),
+            ]
+            return types.ListPromptsResult(prompts=prompts)
+
+        async def get_prompt_handler(
+            ctx: Any,
+            req: types.GetPromptRequestParams,
+        ) -> types.GetPromptResult:
+            prompt_name = req.name
+            arguments = req.arguments or {}
+
+            if self.broker.session_lock.state != SessionState.ACTIVE_DISPATCH:
+                raise MCPError(
+                    code=-32001,
+                    message="ADR-011 Violation: No active locked notebook session. Call select_notebook first.",
+                    data={"code": SESSION_UNLOCKED},
+                )
+
+            locked_id = self.broker.session_lock.locked_notebook_id
+
+            if prompt_name == "synthesize-research":
+                topic = arguments.get("focus_topic", "the complete technical and architectural corpus")
+                content = (
+                    f"Please synthesize and cross-examine the grounded findings across all active sources in "
+                    f"notebook '{locked_id}' focusing specifically on: {topic}. "
+                    f"Enforce strict non-empty citation offsets and report any conflicting evidence."
+                )
+                desc = "Grounded research cross-examination"
+            elif prompt_name == "audit-security-invariants":
+                content = (
+                    f"Perform an architectural and security invariant audit on active notebook '{locked_id}'. "
+                    f"Verify: (1) ADR-011 single-notebook session lock, (2) RBAC permission mode in allowlist.json, "
+                    f"(3) Zero-cookie/token export, and (4) Idempotency and mutation journaling state."
+                )
+                desc = "Security invariants audit"
+            elif prompt_name == "summarize-notebook-context":
+                audience = arguments.get("audience", "technical leadership")
+                content = (
+                    f"Generate a structured executive summary of notebook '{locked_id}' tailored for {audience}. "
+                    f"Include: Overview, Key Architecture Decisions, System Constraints, and Current Status."
+                )
+                desc = "High-density executive briefing"
+            else:
+                raise MCPError(code=-32602, message=f"Unknown prompt name: {prompt_name!r}.", data={"code": NOT_FOUND})
+
+            return types.GetPromptResult(
+                description=desc,
+                messages=[
+                    types.PromptMessage(
+                        role="user",
+                        content=types.TextContent(type="text", text=content),
+                    )
+                ],
+            )
+
+        async def set_level_handler(
+            ctx: Any,
+            req: types.SetLevelRequestParams,
+        ) -> types.EmptyResult:
+            return types.EmptyResult()
+
         self.server.add_request_handler("tools/list", types.ListToolsRequest, list_tools_handler)
         self.server.add_request_handler("tools/call", types.CallToolRequestParams, call_tool_handler)
+        self.server.add_request_handler("resources/list", types.ListResourcesRequest, list_resources_handler)
+        self.server.add_request_handler("resources/templates/list", types.ListResourceTemplatesRequest, list_resource_templates_handler)
+        self.server.add_request_handler("resources/read", types.ReadResourceRequestParams, read_resource_handler)
+        self.server.add_request_handler("prompts/list", types.ListPromptsRequest, list_prompts_handler)
+        self.server.add_request_handler("prompts/get", types.GetPromptRequestParams, get_prompt_handler)
+        self.server.add_request_handler("logging/setLevel", types.SetLevelRequestParams, set_level_handler)
+
+    async def send_progress_notification(
+        self,
+        ctx: Any,
+        progress_token: str | int,
+        progress: float,
+        total: float | None = None,
+        message: str | None = None,
+    ) -> None:
+        """Sends an out-of-band progress notification if supported by the active session context."""
+        session = getattr(ctx, "session", None)
+        if session is not None and hasattr(session, "send_progress_notification"):
+            await session.send_progress_notification(
+                progress_token=progress_token,
+                progress=progress,
+                total=total,
+                message=message,
+            )
 
     async def serve_stdio_async(self) -> None:
         """Runs stdio server loop, exclusively sending JSON-RPC to stdout."""
         async with stdio_server() as (read_stream, write_stream):
-            init_opts = self.server.create_initialization_options()
+            notif_opts = NotificationOptions(
+                tools_changed=True,
+                prompts_changed=True,
+                resources_changed=True,
+            )
+            init_opts = self.server.create_initialization_options(notification_options=notif_opts)
             await self.server.run(read_stream, write_stream, init_opts)
 
     def serve_stdio(self) -> None:

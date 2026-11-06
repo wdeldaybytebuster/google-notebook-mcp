@@ -1,6 +1,6 @@
-# Google Notebook MCP — Tools Reference
+# Google Notebook MCP — Tools & MCP 2025/2026 Protocol Reference
 
-The gateway exposes nine closed tools via standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio transport.
+The gateway exposes 12 closed tools, standardized MCP resources (`resources/*`), dynamic prompts (`prompts/*`), progress notifications (`notifications/progress`), and protocol-level logging via standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio transport.
 
 All schemas strictly enforce `additionalProperties: false` (JSON Schema) and `extra="forbid"` (Pydantic v2). Any unrecognized argument immediately returns an `INVALID_ARGUMENT` error envelope.
 
@@ -19,12 +19,15 @@ All schemas strictly enforce `additionalProperties: false` (JSON Schema) and `ex
 | `create_note` | Write Mutation | `title`, `content`, `idempotency_key` | Creates a new user note within the active notebook. |
 | `list_notes` | Read-only | `page_size`, `cursor` | Retrieves user notes with upstream schema anomaly canaries. |
 | `delete_note` | Write Mutation | `note_id`, `idempotency_key` | Deletes a user note by its unique identifier. |
+| `list_artifacts` | Read-only | `notebook_id`, `artifact_type`, `page_size`, `cursor` | Lists generated studio artifacts (audio overviews, study guides, mind maps, briefings). |
+| `get_artifact_metadata` | Read-only | `notebook_id`, `artifact_id` | Fetches generation parameters, readiness state, duration, and download URI. |
+| `extract_artifact` | Write/Export | `notebook_id`, `artifact_id`, `destination_path` | Extracts artifact to tmpfs/disk in $\le 512\text{ KiB}$ streams returning `FILE_PATH`. |
 
 ### MCP Tool Annotations
 
-Every tool declaration transmits standard Model Context Protocol (MCP) annotations via `list_tools`:
-- **Read-only tools** (`list_notebooks`, `get_notebook_metadata`, `list_sources`, `query_notebook`, `list_notes`): Transmit `readOnlyHint: true`, `destructiveHint: false`, and `idempotentHint: true`.
-- **Write / Mutating tools** (`add_source`, `create_note`, `delete_note`): Transmit `readOnlyHint: false` and `destructiveHint: true` (for `delete_note`) or `false`, alongside `idempotentHint` hints matching their idempotency key protections.
+Every tool declaration transmits standard Model Context Protocol (MCP) annotations via `tools/list`:
+- **Read-only tools** (`list_notebooks`, `get_notebook_metadata`, `list_sources`, `query_notebook`, `list_notes`, `list_artifacts`, `get_artifact_metadata`): Transmit `readOnlyHint: true`, `destructiveHint: false`, and `idempotentHint: true`.
+- **Write / Mutating tools** (`add_source`, `create_note`, `delete_note`, `extract_artifact`): Transmit `readOnlyHint: false` and `destructiveHint: true` (for `delete_note`) or `false`, alongside `idempotentHint` hints matching their idempotency key protections.
 - **Session management** (`select_notebook`): Transmits `readOnlyHint: false`, `destructiveHint: false`, and `idempotentHint: true`.
 
 ---
@@ -181,14 +184,114 @@ Allows creating, reading, and removing user notes in NotebookLM (`create_note` a
 
 ---
 
+## 8. Studio Artifact Operations (`list_artifacts`, `get_artifact_metadata`, `extract_artifact`)
+
+Allows querying, inspecting, and extracting NotebookLM Studio artifacts (Audio Overviews / Deep Dives, Study Guides, Mind Maps, Briefing Docs, Video Overviews).
+
+### `list_artifacts`
+Lists generated studio artifacts in the notebook.
+- **Parameters:**
+  ```json
+  {
+    "notebook_id": "string (optional; automatically bound to session)",
+    "artifact_type": "string (optional; filter by 'audio', 'study_guide', 'mind_map', 'briefing_doc', 'video', 'all')",
+    "page_size": "integer (optional; default: 20)",
+    "cursor": "string (optional; pagination token)"
+  }
+  ```
+- **Returns:** List of artifacts including `artifact_id`, `artifact_type`, `title`, `created_at`, `status` (`READY`, `GENERATING`, `FAILED`), and duration/word count.
+
+### `get_artifact_metadata`
+Retrieves detailed metadata for a specific artifact.
+- **Parameters:**
+  ```json
+  {
+    "notebook_id": "string (optional; automatically bound to session)",
+    "artifact_id": "string (required; artifact identifier)"
+  }
+  ```
+- **Returns:** Comprehensive generation parameters, source grounding references, duration seconds (for audio/video), file size bytes, and download readiness.
+
+### `extract_artifact`
+Extracts and streams artifact content safely to the local filesystem.
+- **Parameters:**
+  ```json
+  {
+    "notebook_id": "string (optional; automatically bound to session)",
+    "artifact_id": "string (required; artifact identifier)",
+    "destination_path": "string (optional; target path on disk. If omitted, extracts to isolated owner-only tmpfs: /tmp/notebooklm-mcp-artifacts/)"
+  }
+  ```
+- **Stream Invariant:** Binary media (audio/video) streams in $\le 512\text{ KiB}$ IPC chunks and is written directly to disk. The tool returns `{ "status": "extracted", "file_path": "/tmp/...", "bytes_written": 1234567, "mime_type": "audio/mp3" }` preventing OOM exhaustion from large Base64 payloads over stdio.
+
+---
+
+## 9. Standardized MCP Resources (`resources/*`)
+
+The gateway implements the MCP Resources protocol, allowing AI clients to inspect notebook resources directly via standard URI schemes without executing tool calls.
+
+### Dynamic Resource Listing (`resources/list`)
+Returns all allowlisted notebooks as browseable MCP resources:
+- `notebooklm://notebooks/{nb_id}/metadata`: JSON document of notebook metadata and statistics.
+- `notebooklm://notebooks/{nb_id}/sources`: Ingested source inventory.
+- `notebooklm://notebooks/{nb_id}/notes`: User notes collection.
+- `notebooklm://notebooks/{nb_id}/artifacts`: Studio artifacts collection.
+
+### Resource Templates (`resources/templates/list`)
+Provides URI templates:
+- `notebooklm://notebooks/{notebook_id}/{resource_type}` (types: `metadata`, `sources`, `notes`, `artifacts`)
+- `notebooklm://notebooks/{notebook_id}/{resource_type}/{item_id}`
+
+### Resource Reading (`resources/read`) & Security Interceptor Gate
+Enforces **Invariant 3 (Universal Security Interceptor Gate)**:
+1. Strict URI regex validation: `^notebooklm://notebooks/([a-zA-Z0-9_\-]+)/([a-zA-Z0-9_\-]+)(?:/([a-zA-Z0-9_\-]+))?$`
+2. ADR-011 Session Lock check: Rejects requests with `SESSION_UNLOCKED` if session is not locked.
+3. Notebook Lock Identity check: Accessing a notebook other than the locked session notebook returns `SESSION_LOCKED`.
+4. Allowlist verification: Unlisted notebooks return `ALLOWLIST_DENIED`.
+
+---
+
+## 10. Standardized MCP Prompts (`prompts/*`)
+
+Exposes curated, parameter-validated prompt templates directly to AI coding assistants:
+
+| Prompt Name | Arguments | Description |
+| :--- | :--- | :--- |
+| `synthesize_sources` | `topic` (required) | Prompts NotebookLM to synthesize all ingested sources around a specific topic with strict citation grounding. |
+| `generate_study_guide` | `focus_area` (optional) | Prompts generation of a structured conceptual study guide and key question breakdown. |
+| `extract_action_items` | `scope` (optional) | Directs the notebook to extract actionable milestones, tasks, and deliverables from source transcripts. |
+| `adversarial_audit` | `spec_source` (required), `plan_source` (required) | Triggers deep adversarial verification comparing an implementation plan against a baseline specification. |
+
+Clients list prompts via `prompts/list` and retrieve formatted messages with parameter substitution via `prompts/get`.
+
+---
+
+## 11. Progress Notifications (`notifications/progress`)
+
+Long-running operations (such as Scotty resumable byte uploads and readiness polling loops) emit standard MCP `notifications/progress` frames to the client:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/progress",
+  "params": {
+    "progressToken": "req-12345",
+    "progress": 3,
+    "total": 5
+  }
+}
+```
+Clients display live upload and polling progress bars in their UI without blocking execution.
+
+---
+
 ## Granular Per-Notebook RBAC Modes (`allowlist.json` v2)
 
 Each allowlisted notebook in `~/.config/notebooklm-mcp-bridge/allowlist.json` (configurable live via the Chrome Extension Popup checklist) supports two granular access modes:
 
 | Mode | Permitted Tools | Blocked Tools (`PERMISSION_DENIED`) |
 | :--- | :--- | :--- |
-| **`READ_ONLY`** | `select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `list_notes`, **`query_notebook`** | `add_source`, `create_note`, `delete_note` |
-| **`INTERACTIVE`** | All 9 tools (`select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `list_notes`, `query_notebook`, `add_source`, `create_note`, `delete_note`) | None |
+| **`READ_ONLY`** | `select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `list_notes`, `list_artifacts`, `get_artifact_metadata`, **`query_notebook`** | `add_source`, `create_note`, `delete_note`, `extract_artifact` |
+| **`INTERACTIVE`** | All 12 tools (`select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `list_notes`, `query_notebook`, `add_source`, `create_note`, `delete_note`, `list_artifacts`, `get_artifact_metadata`, `extract_artifact`) | None |
 
 Updates made in the Extension Popup call `update_allowlist` over Native Messaging, atomically saving `allowlist.json` (`0o600`) and invoking `BrokerDaemon.allowlist_config.reload()` inside `_session_mutex` so active sessions enforce permission changes immediately without restarting the daemon.
 

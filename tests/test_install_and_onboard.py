@@ -75,6 +75,7 @@ def test_get_candidate_extension_ids(tmp_path: Path) -> None:
 
 
 def test_write_native_host_manifests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     config_dir = tmp_path / "config"
     profile_dir = config_dir / "chrome-profile"
     monkeypatch.setattr(onboard, "CONFIG_DIR", config_dir)
