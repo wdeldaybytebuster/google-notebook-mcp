@@ -1441,6 +1441,10 @@ def run_onboarding(
             f"--load-extension={extension_dir.resolve()}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--enable-low-end-device-mode",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--max-active-http-connections=6",
             "chrome://extensions",
         ]
 

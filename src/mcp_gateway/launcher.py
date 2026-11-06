@@ -234,6 +234,10 @@ class DedicatedBrowserLauncher:
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-mode",
+            "--enable-low-end-device-mode",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--max-active-http-connections=6",
             NOTEBOOK_URL,
         ]
         # In containerized / Crostini environments without unprivileged zygote namespaces,
