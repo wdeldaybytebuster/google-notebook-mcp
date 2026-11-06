@@ -456,3 +456,134 @@ def test_account_identity_preflight_attaches_expected_email_and_accounts(broker:
     out2 = broker._attach_identity_preflight(payload2, custom_cmd)
     assert out2["expectedEmail"] == "custom@example.com"
     assert out2["expectedAccounts"] == ["custom@example.com", "other@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_broker_readonly_permits_query_notebook_and_blocks_mutations(tmp_path: Path) -> None:
+    from mcp_gateway.schemas.error import PERMISSION_DENIED
+
+    allowlist_p = tmp_path / "allowlist.json"
+    allowlist_p.write_text(
+        json.dumps({
+            "version": 2,
+            "provider_mode": "browser",
+            "accounts": ["developer@gmail.com"],
+            "notebooks": {
+                "nb-ro": {"title": "Read Only Docs", "mode": "READ_ONLY"},
+                "nb-rw": {"title": "Interactive Docs", "mode": "INTERACTIVE"},
+            },
+        }),
+        encoding="utf-8",
+    )
+    daemon = BrokerDaemon(
+        BrokerConfig(
+            socket_path=str(tmp_path / "ro.sock"),
+            allowlist_path=allowlist_p,
+            journal_db_path=tmp_path / "journal.db",
+        )
+    )
+
+    # Lock session to nb-ro
+    sel_res = await daemon.dispatch({"action": "select_notebook", "notebook_id": "nb-ro"})
+    assert sel_res["ok"] is True
+    assert sel_res.get("mode") == "READ_ONLY"
+
+    # 1. query_notebook MUST BE PERMITTED on READ_ONLY notebooks (reaches companion -> AUTH_REQUIRED in unit test)
+    q_res = await daemon.dispatch({
+        "action": "query_notebook",
+        "notebook_id": "nb-ro",
+        "question": "What is the architecture?",
+        "request_key": "req-ro-allowed-1",
+    })
+    assert q_res["ok"] is False
+    assert q_res["error"]["code"] == AUTH_REQUIRED  # Permitted past RBAC policy!
+
+    # 2. Mutating tools (add_source, create_note, delete_note) MUST BE BLOCKED with PERMISSION_DENIED
+    add_res = await daemon.dispatch({
+        "action": "add_source",
+        "notebook_id": "nb-ro",
+        "idempotency_key": "idem-ro-1",
+        "source": {"type": "text", "title": "Note", "content": "Body"},
+    })
+    assert add_res["ok"] is False
+    assert add_res["error"]["code"] == PERMISSION_DENIED
+    assert "READ_ONLY" in add_res["error"]["message"]
+
+    note_res = await daemon.dispatch({
+        "action": "create_note",
+        "notebook_id": "nb-ro",
+        "title": "Note",
+        "content": "Body",
+        "idempotency_key": "idem-ro-note",
+    })
+    assert note_res["ok"] is False
+    assert note_res["error"]["code"] == PERMISSION_DENIED
+
+    del_res = await daemon.dispatch({
+        "action": "delete_note",
+        "notebook_id": "nb-ro",
+        "note_id": "note-1",
+        "idempotency_key": "idem-ro-del",
+    })
+    assert del_res["ok"] is False
+    assert del_res["error"]["code"] == PERMISSION_DENIED
+
+
+@pytest.mark.asyncio
+async def test_broker_live_allowlist_reload_with_mutex_and_uuid_validation(
+    broker: BrokerDaemon,
+) -> None:
+    from mcp_gateway.schemas.error import INVALID_ARGUMENT, PERMISSION_DENIED
+
+    valid_uuid = "123e4567-e89b-12d3-a456-426614174000"
+
+    # 1. get_allowlist works in DISCOVERY_ONLY without SESSION_UNLOCKED
+    get_res = await broker.dispatch({"action": "get_allowlist"})
+    assert get_res["ok"] is True
+    assert "nb-allowed-1" in get_res["notebooks"]
+
+    # 2. update_allowlist rejects path traversal / malformed manual IDs when validate_uuids=True
+    bad_res = await broker.dispatch({
+        "action": "update_allowlist",
+        "validate_uuids": True,
+        "notebooks": {
+            "../../etc/passwd": {"title": "Traversal", "mode": "READ_ONLY"},
+        },
+    })
+    assert bad_res["ok"] is False
+    assert bad_res["error"]["code"] == INVALID_ARGUMENT
+
+    # 3. update_allowlist accepts valid UUIDs, saves atomically, and calls self.allowlist_config.reload() under _session_mutex
+    upd_res = await broker.dispatch({
+        "action": "update_allowlist",
+        "validate_uuids": True,
+        "notebooks": {
+            valid_uuid: {"title": "Live Reloaded NB", "mode": "READ_ONLY"},
+        },
+    })
+    assert upd_res["ok"] is True
+    assert upd_res["notebooks"][valid_uuid]["mode"] == "READ_ONLY"
+    assert is_notebook_allowed(broker.allowlist_config, valid_uuid) is True
+
+    # 4. Selecting the newly added notebook succeeds immediately in the live session and enforces READ_ONLY
+    sel_res = await broker.dispatch({"action": "select_notebook", "notebook_id": valid_uuid})
+    assert sel_res["ok"] is True
+    assert sel_res["mode"] == "READ_ONLY"
+
+    mut_res = await broker.dispatch({
+        "action": "add_source",
+        "notebook_id": valid_uuid,
+        "idempotency_key": "idem-live-1",
+        "source": {"type": "text", "title": "T", "content": "C"},
+    })
+    assert mut_res["ok"] is False
+    assert mut_res["error"]["code"] == PERMISSION_DENIED
+
+    # 5. companion_forward is not blocked by SessionLock in DISCOVERY_ONLY or LOCKED
+    fwd_res = await broker.dispatch({
+        "action": "companion_forward",
+        "companion_command": "batchexecute",
+        "payload": {"rpcId": "wXbhsf", "paramsJson": "[]"},
+    })
+    assert fwd_res["ok"] is False
+    assert fwd_res["error"]["code"] == AUTH_REQUIRED
