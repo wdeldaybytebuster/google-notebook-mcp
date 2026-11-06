@@ -314,6 +314,205 @@ body.popup-root {
   cursor: not-allowed;
 }
 
+.btn--secondary {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+}
+
+.btn--secondary:hover {
+  border-color: var(--border-focus);
+}
+
+.btn--secondary:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.btn--secondary:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.btn--sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Setup Mode Banner
+   -------------------------------------------------------------------------- */
+
+.setup-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--state-warning);
+  border-radius: var(--radius-xl);
+}
+
+.setup-banner[hidden] {
+  display: none;
+}
+
+.setup-banner__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--state-warning);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.setup-banner__desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.setup-banner__code {
+  display: block;
+  padding: 8px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.setup-banner__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* --------------------------------------------------------------------------
+   Section header row & NotebookAllowlistCard controls
+   -------------------------------------------------------------------------- */
+
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.notebook-card__checkbox {
+  margin-top: 3px;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.notebook-card__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.mode-toggle--readonly {
+  color: var(--border-focus);
+  border-color: var(--border-focus);
+}
+
+.mode-toggle--interactive {
+  color: var(--state-success);
+  border-color: var(--state-success);
+}
+
+.mode-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* --------------------------------------------------------------------------
+   Manual Notebook Fallback Form
+   -------------------------------------------------------------------------- */
+
+.manual-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+}
+
+.manual-form__label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.manual-form__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.manual-form__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.manual-form__input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.manual-form__select {
+  padding: 6px 8px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.manual-form__select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.manual-form__error {
+  font-size: 11px;
+  color: var(--state-error);
+}
+
+.manual-form__error[hidden] {
+  display: none;
+}
+
 /* --------------------------------------------------------------------------
    Docs link
    -------------------------------------------------------------------------- */
