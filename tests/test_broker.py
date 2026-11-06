@@ -91,6 +91,115 @@ def test_allowlist_missing_raises(tmp_path: Path) -> None:
         load_allowlist(missing_path)
 
 
+def test_allowlist_v2_structured_modes_reload_and_v1_migration(tmp_path: Path) -> None:
+    import os
+    import stat
+    from mcp_gateway.broker.allowlist import (
+        NotebookPermission,
+        get_notebook_mode,
+        is_tool_permitted_for_notebook,
+        parse_and_validate_notebook_id,
+        set_notebook_permission,
+    )
+
+    # 1. Load legacy v1 flat list -> migrates to INTERACTIVE permissions
+    v1_path = tmp_path / "v1_allowlist.json"
+    v1_path.write_text(
+        json.dumps({
+            "version": 1,
+            "provider_mode": "browser",
+            "accounts": ["dev@example.com"],
+            "notebooks": ["nb-legacy-1"],
+        }),
+        encoding="utf-8",
+    )
+    cfg_v1 = load_allowlist(v1_path)
+    assert is_notebook_allowed(cfg_v1, "nb-legacy-1") is True
+    assert get_notebook_mode(cfg_v1, "nb-legacy-1") == "INTERACTIVE"
+    assert is_tool_permitted_for_notebook(cfg_v1, "nb-legacy-1", "query_notebook") is True
+    assert is_tool_permitted_for_notebook(cfg_v1, "nb-legacy-1", "add_source") is True
+
+    # 2. Set READ_ONLY permission and save as v2 structured map
+    cfg_v2 = set_notebook_permission(
+        cfg_v1,
+        "nb-readonly-2",
+        title="Project Architecture Docs",
+        mode="READ_ONLY",
+    )
+    v2_path = tmp_path / "v2_allowlist.json"
+    save_allowlist(cfg_v2, v2_path)
+    if os.name != "nt":
+        assert stat.S_IMODE(v2_path.stat().st_mode) == 0o600
+
+    raw_saved = json.loads(v2_path.read_text(encoding="utf-8"))
+    assert raw_saved["version"] == 2
+    assert raw_saved["notebooks"]["nb-readonly-2"] == {
+        "title": "Project Architecture Docs",
+        "mode": "READ_ONLY",
+    }
+
+    reloaded = load_allowlist(v2_path)
+    assert is_notebook_allowed(reloaded, "nb-readonly-2") is True
+    assert get_notebook_mode(reloaded, "nb-readonly-2") == "READ_ONLY"
+    assert reloaded.notebook_permissions["nb-readonly-2"] == NotebookPermission(
+        title="Project Architecture Docs",
+        mode="READ_ONLY",
+    )
+
+    # 3. Granular RBAC checks for READ_ONLY vs INTERACTIVE:
+    # READ_ONLY MUST allow read + select_notebook + query_notebook, and MUST block mutating tools
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "list_notebooks") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "select_notebook") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "get_notebook_metadata") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "list_sources") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "list_notes") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "query_notebook") is True
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "add_source") is False
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "create_note") is False
+    assert is_tool_permitted_for_notebook(reloaded, "nb-readonly-2", "delete_note") is False
+
+    # 4. In-place AllowlistConfig.reload() updates singleton state from disk
+    v2_path.write_text(
+        json.dumps({
+            "version": 2,
+            "provider_mode": "browser",
+            "accounts": ["dev@example.com"],
+            "notebooks": {
+                "123e4567-e89b-12d3-a456-426614174000": {
+                    "title": "Hot Reloaded NB",
+                    "mode": "READ_ONLY",
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    reloaded.reload()
+    assert is_notebook_allowed(reloaded, "123e4567-e89b-12d3-a456-426614174000") is True
+    assert get_notebook_mode(reloaded, "123e4567-e89b-12d3-a456-426614174000") == "READ_ONLY"
+
+    # 5. Strict UUIDv4 validation and URL extraction for manual fallback input
+    valid_uuid = "123e4567-e89b-12d3-a456-426614174000"
+    assert parse_and_validate_notebook_id(valid_uuid) == valid_uuid
+    assert (
+        parse_and_validate_notebook_id(
+            f"https://notebook.google.com/notebook/{valid_uuid}?authuser=0"
+        )
+        == valid_uuid
+    )
+    assert (
+        parse_and_validate_notebook_id(
+            f"https://notebooklm.google.com/notebook/{valid_uuid}/"
+        )
+        == valid_uuid
+    )
+    with pytest.raises(ValueError, match="Invalid notebook ID"):
+        parse_and_validate_notebook_id("../../etc/passwd")
+    with pytest.raises(ValueError, match="Invalid notebook ID"):
+        parse_and_validate_notebook_id("https://evil.example.com/notebook/123e4567-e89b-12d3-a456-426614174000")
+    with pytest.raises(ValueError, match="Invalid notebook ID"):
+        parse_and_validate_notebook_id("not-a-uuid")
+
+
 def test_secret_scrubber_tokens() -> None:
     sample = "User logged in with ya29.a0AfH6SMDI890123456789 and Bearer ya29.xyz1234567890123"
     cleaned = scrub(sample)
