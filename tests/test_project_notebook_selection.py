@@ -9,17 +9,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mcp_gateway.broker.allowlist import AllowlistConfig
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon
 from mcp_gateway.broker.project_config import (
-    PROJECT_CONFIG_FILENAME,
     get_project_notebook_config,
     save_project_notebook_config,
 )
-from mcp_gateway.broker.session import SessionLock, SessionState
+from mcp_gateway.broker.session import SessionLock
 from mcp_gateway.schemas.error import SESSION_UNLOCKED
 from mcp_gateway.schemas.tools import (
-    SELECT_NOTEBOOK_SCHEMA,
     SelectNotebookInput,
     validate_tool_args,
 )

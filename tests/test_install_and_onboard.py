@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import json
 import os
 import socket
-import struct
-import sys
 import threading
 import urllib.parse
 from pathlib import Path

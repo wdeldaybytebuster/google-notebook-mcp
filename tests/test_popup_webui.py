@@ -14,6 +14,7 @@ POPUP_JS_PATH = EXT_DIR / "popup.js"
 
 def _run_node_script(script: str) -> dict[str, Any]:
     env = os.environ.copy()
+    env.pop("NODE_COMPILE_CACHE", None)
     env["UV_THREADPOOL_SIZE"] = "3"
     env["NODE_OPTIONS"] = "--max-old-space-size=1024 --max-semi-space-size=128"
     proc = subprocess.run(

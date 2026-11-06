@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import pytest
 import mcp.types as types
 
 from mcp_gateway.schemas.error import (
@@ -23,7 +22,6 @@ from mcp_gateway.schemas.error import (
     UPSTREAM_DRIFT,
     VAULT_LOCKED,
     ErrorDetail,
-    FailureEnvelope,
     categorize_error,
     make_error,
 )

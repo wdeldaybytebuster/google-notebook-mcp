@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 import sqlite3
@@ -21,7 +20,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon, McpFacade
-from mcp_gateway.broker.session import SessionState
 from mcp_gateway.engine.rpc_templates import (
     make_create_note_payload,
     make_delete_note_payload,
@@ -29,7 +27,6 @@ from mcp_gateway.engine.rpc_templates import (
 from mcp_gateway.schemas.error import (
     ALLOWLIST_DENIED,
     INVALID_ARGUMENT,
-    REQUEST_KEY_CONFLICT,
     UPSTREAM_SCHEMA_DRIFT,
 )
 from mcp_gateway.storage.journal import (
@@ -64,7 +61,7 @@ def test_sqlite_user_version_migration(tmp_path: Path) -> None:
     """Verifies atomic migration from schema version 1 to 2, expanding operation_type CHECK constraint."""
     db_file = tmp_path / "legacy_v1.db"
     conn = sqlite3.connect(str(db_file))
-    
+
     # Setup legacy version 1 schema
     v1_sql = """
     PRAGMA user_version = 1;

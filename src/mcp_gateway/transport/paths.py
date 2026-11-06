@@ -51,12 +51,13 @@ def get_windows_socket_path(local_appdata: str | None = None) -> str:
     """Resolves the Windows AF_UNIX domain socket path under %LOCALAPPDATA% with length guard."""
     base = local_appdata or os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     sock_dir = Path(base) / "notebooklm-mcp"
-    try:
-        sock_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
     sock_path = str(sock_dir / DEFAULT_POSIX_SOCKET_NAME)
     if len(sock_path) > 108:
         return DEFAULT_WINDOWS_PIPE_NAME
+    if sys.platform == "win32":
+        try:
+            sock_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
     return sock_path
 

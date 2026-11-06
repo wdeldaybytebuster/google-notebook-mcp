@@ -20,7 +20,6 @@ import sys
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from mcp_gateway.host.native_host import setup_stderr_redirection
 

@@ -137,9 +137,10 @@ gemini-notebook-mcp install
 1. Open Chrome and navigate to `chrome://extensions`.
 2. Enable **Developer mode** (toggle in the top-right).
 3. Click **Load unpacked** and select the `src/extension/` directory from this repository.
-4. Copy the generated **Extension ID** (e.g., `abcdefghijklmnop...`). If it differs from the default, run:
+4. Copy the generated **Extension ID** (e.g., `abcdefghijklmnop...`) — or open the extension popup's **Setup Mode** banner — and run:
    ```bash
-   gemini-notebook-mcp install --extension-id <COPIED_EXTENSION_ID>
+   python3 setup_native_host.py --extension-id <COPIED_EXTENSION_ID>
+   # or: gemini-notebook-mcp install --extension-id <COPIED_EXTENSION_ID>
    ```
 
 #### 4. Launch Gateway & Dedicated Browser
@@ -176,7 +177,6 @@ claude mcp add gemini-notebook -- python3 -m mcp_gateway.cli mcp
       "command": "python3",
       "args": ["-m", "mcp_gateway.cli", "mcp"],
       "env": {
-        "MCP_BROKER_SOCKET": "/tmp/notebooklm-mcp-broker.sock",
         "UV_THREADPOOL_SIZE": "3"
       }
     }
@@ -192,12 +192,14 @@ claude mcp add gemini-notebook -- python3 -m mcp_gateway.cli mcp
       "command": "python3",
       "args": ["-m", "mcp_gateway.cli", "mcp"],
       "env": {
-        "MCP_BROKER_SOCKET": "/tmp/notebooklm-mcp-broker.sock"
+        "UV_THREADPOOL_SIZE": "3"
       }
     }
   }
 }
 ```
+
+> **Note on `MCP_BROKER_SOCKET`:** By default, both the broker daemon and MCP client automatically resolve the secure platform IPC path via `get_default_ipc_path()` (`$XDG_RUNTIME_DIR/notebooklm-mcp/broker.sock` or `~/.config/notebooklm-mcp-bridge/broker.sock` on Linux, `~/Library/Application Support/notebooklm-mcp/broker.sock` on macOS, and `\\.\pipe\notebooklm-mcp-broker` on Windows). Set `MCP_BROKER_SOCKET` in `env` only when overriding the socket path on both the broker and client.
 
 ### Cline / Roo Code (`cline_mcp_settings.json`)
 ```json

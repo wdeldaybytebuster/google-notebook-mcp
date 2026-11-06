@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from mcp_gateway.engine.coordinate import (
-    CitationSpan,
     normalize_citation,
     utf16_slice,
     utf16_to_unicode_offset,
@@ -97,7 +96,7 @@ def test_offsets_exceeding_document_length() -> None:
     text = "Short text 😀"
     # len(text) in Python = 12
     # UTF-16 length = 11 + 2 = 13 code units
-    doc_utf16_len = 13
+    assert len(text.encode("utf-16-le")) // 2 == 13
 
     # Asking for offset 100 exceeds document length
     py_offset = utf16_to_unicode_offset(text, 100)

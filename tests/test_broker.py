@@ -6,7 +6,6 @@ from typing import Any, cast
 import pytest
 
 from mcp_gateway.broker.allowlist import (
-    AllowlistConfig,
     add_notebook,
     is_notebook_allowed,
     load_allowlist,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import sys
+from typing import Any
 import pytest
 
 from mcp_gateway.transport.ipc import UnixSocketServer, create_ipc_server, open_ipc_connection
@@ -149,4 +150,67 @@ def test_journal_wal_busy_retry(tmp_path: Path) -> None:
     result = journal._execute_with_busy_retry(flaky_write, max_retries=3, base_delay=0.01)
     assert result == "success"
     assert attempts == 3
+
+
+def test_windows_named_pipe_server_has_dispatch_helper() -> None:
+    from mcp_gateway.transport.ipc import WindowsNamedPipeServer
+
+    async def dummy_cb(reader: Any, writer: Any) -> None:
+        pass
+
+    srv = WindowsNamedPipeServer(dummy_cb)
+    assert callable(getattr(srv, "_dispatch_connected_pipe", None))
+
+
+@pytest.mark.asyncio
+async def test_windows_named_pipe_server_dispatch_connected_pipe_roundtrip() -> None:
+    from mcp_gateway.transport.ipc import WindowsNamedPipeServer
+
+    received: list[bytes] = []
+    written_chunks: list[bytes] = []
+    disconnected: list[Any] = []
+    closed_handles: list[Any] = []
+
+    async def handler_cb(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        data = await reader.read(64)
+        received.append(data)
+        writer.write(b"PONG:" + data)
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    class MockWin32File:
+        def __init__(self) -> None:
+            self._reads = [b"PING", b""]
+
+        def ReadFile(self, _handle: Any, _buf_size: int) -> tuple[int, bytes]:
+            if self._reads:
+                chunk = self._reads.pop(0)
+                if chunk:
+                    return (0, chunk)
+            raise OSError("BROKEN_PIPE")
+
+        def WriteFile(self, _handle: Any, data: bytes) -> tuple[int, int]:
+            written_chunks.append(bytes(data))
+            return (0, len(data))
+
+        def FlushFileBuffers(self, _handle: Any) -> None:
+            pass
+
+        def CloseHandle(self, handle: Any) -> None:
+            closed_handles.append(handle)
+
+    class MockWin32Pipe:
+        def DisconnectNamedPipe(self, handle: Any) -> None:
+            disconnected.append(handle)
+
+    srv = WindowsNamedPipeServer(handler_cb)
+    srv._serving = True
+    await srv._dispatch_connected_pipe("mock-pipe-handle-1", MockWin32File(), MockWin32Pipe())
+
+    assert received == [b"PING"]
+    assert b"".join(written_chunks) == b"PONG:PING"
+    assert disconnected == ["mock-pipe-handle-1"]
+    assert closed_handles == ["mock-pipe-handle-1"]
+
 

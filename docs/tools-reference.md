@@ -137,18 +137,21 @@ Executes a natural language query against the notebook knowledge base with groun
 
 ## 6. `add_source`
 
-Ingests new material into the notebook.
+Ingests new material into the notebook (requires `INTERACTIVE` allowlist mode; blocked with `PERMISSION_DENIED` on `READ_ONLY` notebooks).
 
 ### Parameters
 ```json
 {
+  "notebook_id": "string (required; automatically bound to locked session notebook)",
   "idempotency_key": "string (required; unique mutation key)",
-  "wait_until_ready": "boolean (default: true)",
+  "wait_until_ready": "boolean (optional; default: false)",
   "source": {
     "type": "text | url | youtube | drive | file",
-    "content": "string (required for text/url/youtube/drive)",
-    "filename": "string (required for file uploads)",
-    "file_path": "string (required for local file uploads)"
+    "title": "string (optional; source title or filename for file uploads)",
+    "content": "string (optional; pasted text or raw/base64 file content)",
+    "url": "string (optional; target URL for url or youtube sources)",
+    "doc_id": "string (optional; Google Drive document ID for drive sources)",
+    "mime_type": "string (optional; MIME type hint for drive or file sources)"
   }
 }
 ```
@@ -156,25 +159,38 @@ Ingests new material into the notebook.
 ### Scotty Resumable File Uploads
 Binary files (`.pdf`, `.docx`, `.txt`, `.csv`, `.md`) use Google's 3-step Scotty upload protocol:
 1. Intent registration via `o4cbdc` RPC.
-2. In-browser session creation with chunked caching (`chrome.storage.session`).
+2. In-browser session creation routed through `page-main.js` (enforcing P-03 identity preflight) with chunked caching (`chrome.storage.session`).
 3. Streaming byte transfer in $\le 512\text{ KiB}$ slices with offset recovery.
 
 ---
 
 ## 7. Note Operations (`create_note`, `list_notes`, `delete_note`)
 
-Allows creating, reading, and removing user notes in NotebookLM.
+Allows creating, reading, and removing user notes in NotebookLM (`create_note` and `delete_note` require `INTERACTIVE` mode; `list_notes` is permitted in both `READ_ONLY` and `INTERACTIVE` modes).
 
 ### `create_note`
-- Parameters: `title`, `content`, `idempotency_key`.
+- Parameters: `notebook_id`, `title` (optional), `content`, `idempotency_key`.
 - Journaled via SQLite WAL state machine.
 
 ### `list_notes`
-- Parameters: `page_size`, `cursor`.
+- Parameters: `notebook_id`, `page_size`, `cursor`.
 - Enforces loud failure canary (`UPSTREAM_SCHEMA_DRIFT`) if Google changes internal array layouts.
 
 ### `delete_note`
-- Parameters: `note_id`, `idempotency_key`.
+- Parameters: `notebook_id`, `note_id`, `idempotency_key`.
+
+---
+
+## Granular Per-Notebook RBAC Modes (`allowlist.json` v2)
+
+Each allowlisted notebook in `~/.config/notebooklm-mcp-bridge/allowlist.json` (configurable live via the Chrome Extension Popup checklist) supports two granular access modes:
+
+| Mode | Permitted Tools | Blocked Tools (`PERMISSION_DENIED`) |
+| :--- | :--- | :--- |
+| **`READ_ONLY`** | `select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `list_notes`, **`query_notebook`** | `add_source`, `create_note`, `delete_note` |
+| **`INTERACTIVE`** | All 9 tools (`select_notebook`, `list_notebooks`, `get_notebook_metadata`, `list_sources`, `list_notes`, `query_notebook`, `add_source`, `create_note`, `delete_note`) | None |
+
+Updates made in the Extension Popup call `update_allowlist` over Native Messaging, atomically saving `allowlist.json` (`0o600`) and invoking `BrokerDaemon.allowlist_config.reload()` inside `_session_mutex` so active sessions enforce permission changes immediately without restarting the daemon.
 
 ---
 
@@ -186,7 +202,7 @@ All errors return a deterministic JSON error contract:
 {
   "ok": false,
   "error": {
-    "code": "ALLOWLIST_DENIED | AUTH_REQUIRED | MUTATION_UNKNOWN | INVALID_ARGUMENT | SESSION_UNLOCKED | SESSION_LOCKED | INTERNAL | NOT_FOUND | STREAM_SEVERED | UPSTREAM_SCHEMA_DRIFT",
+    "code": "ALLOWLIST_DENIED | PERMISSION_DENIED | AUTH_REQUIRED | MUTATION_UNKNOWN | INVALID_ARGUMENT | SESSION_UNLOCKED | SESSION_LOCKED | INTERNAL | NOT_FOUND | STREAM_SEVERED | UPSTREAM_SCHEMA_DRIFT",
     "message": "Human-readable explanation",
     "retryable": false
   },

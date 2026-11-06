@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from typing import Any
 import pytest
 
 from mcp_gateway.broker.broker import BrokerConfig, BrokerDaemon
+from mcp_gateway.broker.session import SessionState
 from mcp_gateway.schemas.error import (
-    MUTATION_UNKNOWN,
     REQUEST_KEY_CONFLICT,
 )
 from mcp_gateway.storage.journal import (
-    MutationJournal,
-    MutationRecord,
     MutationState,
     OperationType,
 )
@@ -26,9 +22,6 @@ def allowlist_file(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return p
-
-
-from mcp_gateway.broker.session import SessionState
 
 
 @pytest.fixture
