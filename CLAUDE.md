@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Google Notebook MCP** (451 symbols, 608 relationships, 10 execution flows).
+This project is indexed by GitNexus as **google-notebook-mcp** (2218 symbols, 3983 relationships, 134 execution flows).
 
 > Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
 
@@ -25,10 +25,10 @@ This project is indexed by GitNexus as **Google Notebook MCP** (451 symbols, 608
 
 | Resource | Use for |
 | --- | --- |
-| `gitnexus://repo/Google Notebook MCP/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/Google Notebook MCP/clusters` | All functional areas |
-| `gitnexus://repo/Google Notebook MCP/processes` | All execution flows |
-| `gitnexus://repo/Google Notebook MCP/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/google-notebook-mcp/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/google-notebook-mcp/clusters` | All functional areas |
+| `gitnexus://repo/google-notebook-mcp/processes` | All execution flows |
+| `gitnexus://repo/google-notebook-mcp/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
