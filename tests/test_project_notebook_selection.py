@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -47,7 +48,8 @@ def test_save_project_notebook_config_permissions_and_atomicity(tmp_path: Path) 
     saved = save_project_notebook_config("00000000-0000-0000-0000-000000000001", "Test Project", project_dir=tmp_path)
     assert saved is not None
     assert saved.exists()
-    assert (saved.stat().st_mode & 0o777) == 0o600
+    if sys.platform != "win32":
+        assert (saved.stat().st_mode & 0o777) == 0o600
 
 
 def test_select_notebook_schema_validation() -> None:

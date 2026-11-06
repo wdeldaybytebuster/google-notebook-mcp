@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import socket
+import sys
 import threading
 import urllib.parse
 from pathlib import Path
@@ -147,6 +148,8 @@ def test_select_browser_non_interactive() -> None:
 
 
 def test_is_socket_live_unlinks_stale(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Unix domain socket cleanup is POSIX-specific")
     stale_sock = tmp_path / "stale.sock"
     stale_sock.touch()
     assert stale_sock.exists()
