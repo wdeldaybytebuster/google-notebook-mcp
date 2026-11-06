@@ -393,6 +393,13 @@ class BrokerDaemon:
         finally:
             if self._active_companion_writer is writer:
                 self._active_companion_writer = None
+            try:
+                tmpfs_dir = Path("/tmp/notebooklm-mcp-artifacts")
+                if tmpfs_dir.exists():
+                    for part_file in tmpfs_dir.glob("*.part_*"):
+                        part_file.unlink(missing_ok=True)
+            except Exception:
+                pass
             writer.close()
             try:
                 await writer.wait_closed()
@@ -631,6 +638,15 @@ class BrokerDaemon:
             result = await self._handle_discover_notebooks(command)
             return self._finalize_dispatch(result, correlation_id, request_id=request_id)
 
+        # Artifact streaming chunks from browser companion bypass single-notebook SessionLock
+        if action == "artifact_chunk":
+            result = await self._handle_artifact_chunk(command)
+            return self._finalize_dispatch(result, correlation_id, request_id=request_id)
+
+        if action == "artifact_chunk_cancel":
+            result = await self._handle_artifact_chunk_cancel(command)
+            return self._finalize_dispatch(result, correlation_id, request_id=request_id)
+
         # ADR-011: Validate session state and apply parameter overwrite
         validation_err = await self.session_lock.validate_and_prepare(action, command)
         if validation_err is not None:
@@ -688,6 +704,10 @@ class BrokerDaemon:
                 result = await self._handle_get_artifact_metadata(command)
             elif action == "extract_artifact":
                 result = await self._handle_extract_artifact(command)
+            elif action == "artifact_chunk":
+                result = await self._handle_artifact_chunk(command)
+            elif action == "artifact_chunk_cancel":
+                result = await self._handle_artifact_chunk_cancel(command)
             else:
                 result = make_error(
                     INVALID_ARGUMENT,
@@ -1906,11 +1926,31 @@ class BrokerDaemon:
             "deleted": True,
         }
 
+    def _get_artifact_extension(self, artifact_type: str) -> str:
+        """Derives standard file extension strictly from artifact type."""
+        t = artifact_type.lower()
+        if "audio" in t:
+            return "mp3"
+        if "video" in t:
+            return "mp4"
+        if any(k in t for k in ("report", "study_guide", "briefing_doc", "mind_map", "quiz", "flashcard", "note")):
+            return "md"
+        return "bin"
+
     async def _handle_list_artifacts(self, command: dict[str, Any]) -> dict[str, Any]:
         """Lists Studio panel deliverables with optional type filtering and Invariant 4 canaries."""
         nb_id = str(command["notebook_id"])
         correlation_id = command.get("request_key") or command.get("idempotency_key")
-        type_filter = command.get("artifact_type_filter")
+        type_filter = command.get("artifact_type_filter") or command.get("artifact_type")
+
+        # Invariant: Sanitize notebook_id against path traversal
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", nb_id):
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Invalid notebook_id {nb_id!r}: must match ^[a-zA-Z0-9_-]{{1,64}}$",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
 
         rpc_payload = make_get_metadata_payload(nb_id)
         res = await self.send_to_companion(
@@ -1924,9 +1964,11 @@ class BrokerDaemon:
         decoder = BatchexecuteStreamDecoder()
         records = decoder.feed(body.encode("utf-8"))
 
+        rlm_found = False
         raw_artifacts: list[Any] = []
         for record in records:
             if record.get("rpc_id") == "rLM1Ne":
+                rlm_found = True
                 data = record.get("data")
                 if not isinstance(data, list) or len(data) == 0 or not isinstance(data[0], list):
                     return make_error(
@@ -1938,44 +1980,89 @@ class BrokerDaemon:
 
                 container = data[0]
                 # Invariant 4 canary: Check container length
-                if len(container) <= 17:
+                if len(container) <= 18:
                     return make_error(
                         UPSTREAM_SCHEMA_DRIFT,
-                        f"rLM1Ne container length is {len(container)}, expected > 17 (mitigation M-05)",
+                        f"rLM1Ne container length is {len(container)} (expected > 18 for artifacts array). Upstream schema shifted.",
                         retryable=False,
                         mcp_correlation_id=correlation_id,
                     ).to_dict()
 
-                if len(container) > 18 and isinstance(container[18], list):
-                    raw_artifacts = container[18]
-                elif isinstance(container.get(18) if isinstance(container, dict) else None, list):
-                    raw_artifacts = container[18]
+                artifacts_array = container[18]
+                if not isinstance(artifacts_array, list):
+                    return make_error(
+                        UPSTREAM_SCHEMA_DRIFT,
+                        f"rLM1Ne container[18] is not an array (type: {type(artifacts_array)}). Upstream schema shifted.",
+                        retryable=False,
+                        mcp_correlation_id=correlation_id,
+                    ).to_dict()
+
+                raw_artifacts = artifacts_array
                 break
+
+        if not rlm_found:
+            return make_error(
+                UPSTREAM_SCHEMA_DRIFT,
+                "rLM1Ne record missing from response stream.",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
 
         artifacts: list[dict[str, Any]] = []
         for item in raw_artifacts:
-            if not isinstance(item, list) or len(item) < 2:
+            art_dict: dict[str, Any] = {}
+            if isinstance(item, list):
+                if len(item) < 2:
+                    continue
+                art_id = str(item[0]) if item[0] else ""
+                title = str(item[1]) if len(item) > 1 and item[1] else "Untitled Artifact"
+                art_type = str(item[2]) if len(item) > 2 and item[2] else "REPORT"
+                status = "READY" if len(item) > 3 and item[3] == 2 else ("GENERATING" if len(item) > 3 and item[3] == 1 else "READY")
+                download_url = str(item[4]) if len(item) > 4 and item[4] else None
+                content = str(item[5]) if len(item) > 5 and item[5] else None
+                art_dict = {
+                    "id": art_id,
+                    "title": title,
+                    "type": art_type,
+                    "status": status,
+                    "notebook_id": nb_id,
+                }
+                if download_url:
+                    art_dict["download_url"] = download_url
+                    art_dict["url"] = download_url
+                if content:
+                    art_dict["content"] = content
+            elif isinstance(item, dict):
+                art_id = str(item.get("id") or item.get("artifact_id") or "")
+                title = str(item.get("title") or "Untitled Artifact")
+                art_type = str(item.get("type") or item.get("artifact_type") or "REPORT")
+                status = str(item.get("status") or "READY")
+                art_dict = {
+                    "id": art_id,
+                    "title": title,
+                    "type": art_type,
+                    "status": status,
+                    "notebook_id": nb_id,
+                }
+                if item.get("download_url") or item.get("url"):
+                    art_dict["download_url"] = item.get("download_url") or item.get("url")
+                    art_dict["url"] = art_dict["download_url"]
+                if item.get("content"):
+                    art_dict["content"] = item.get("content")
+            else:
                 continue
-            art_id = str(item[0]) if item[0] else ""
-            title = str(item[1]) if len(item) > 1 and item[1] else "Untitled Artifact"
-            art_type = str(item[2]) if len(item) > 2 and item[2] else "REPORT"
-            status = "READY" if len(item) > 3 and item[3] == 2 else ("GENERATING" if len(item) > 3 and item[3] == 1 else "READY")
 
-            if type_filter and art_type.upper() != str(type_filter).upper():
-                continue
+            if type_filter and str(type_filter).upper() != "ALL":
+                if art_dict["type"].upper() != str(type_filter).upper():
+                    continue
 
-            artifacts.append({
-                "id": art_id,
-                "title": title,
-                "type": art_type,
-                "status": status,
-                "notebook_id": nb_id,
-            })
+            artifacts.append(art_dict)
 
+        page_size = int(command.get("page_size", 20))
         return {
             "ok": True,
             "notebook_id": nb_id,
-            "artifacts": artifacts,
+            "artifacts": artifacts[:page_size],
             "total_count": len(artifacts),
         }
 
@@ -1984,6 +2071,23 @@ class BrokerDaemon:
         nb_id = str(command["notebook_id"])
         art_id = str(command["artifact_id"])
         correlation_id = command.get("request_key") or command.get("idempotency_key")
+
+        # Invariant: Sanitize artifact_id against path traversal
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", art_id):
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Invalid artifact_id {art_id!r}: must match ^[a-zA-Z0-9_-]{{1,64}}$",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", nb_id):
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Invalid notebook_id {nb_id!r}: must match ^[a-zA-Z0-9_-]{{1,64}}$",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
 
         list_res = await self._handle_list_artifacts({"action": "list_artifacts", "notebook_id": nb_id})
         if not list_res.get("ok"):
@@ -2022,6 +2126,23 @@ class BrokerDaemon:
         out_fmt = str(command.get("output_format", "MARKDOWN")).upper()
         correlation_id = command.get("request_key") or command.get("idempotency_key")
 
+        # Invariant: Sanitize artifact_id against path traversal
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", art_id):
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Invalid artifact_id {art_id!r}: must match ^[a-zA-Z0-9_-]{{1,64}}$",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", nb_id):
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Invalid notebook_id {nb_id!r}: must match ^[a-zA-Z0-9_-]{{1,64}}$",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
         meta_res = await self._handle_get_artifact_metadata({
             "action": "get_artifact_metadata",
             "notebook_id": nb_id,
@@ -2046,34 +2167,220 @@ class BrokerDaemon:
                 "_meta": {"mcp_correlation_id": correlation_id},
             }
 
-        # Invariant 2: High-bandwidth binary media streaming to tmpfs (0o700)
-        if art_type in ("AUDIO", "VIDEO") or out_fmt == "FILE_PATH":
-            ext = "mp3" if art_type == "AUDIO" else ("mp4" if art_type == "VIDEO" else "bin")
-            tmpfs_dir = Path("/tmp/notebooklm-mcp-artifacts")
-            tmpfs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            os.chmod(tmpfs_dir, 0o700)
+        ext = self._get_artifact_extension(art_type)
+        is_binary = art_type in ("AUDIO", "VIDEO")
 
-            target_file = tmpfs_dir / f"art_{art_id}.{ext}"
-            if not target_file.exists():
-                with open(target_file, "wb") as f:
-                    f.write(b"")
-                os.chmod(target_file, 0o600)
-
+        # Text/markdown artifacts: return formatted Markdown text directly unless FILE_PATH requested
+        if not is_binary and out_fmt != "FILE_PATH":
+            title = art.get("title", "Studio Artifact")
+            raw_content = str(art.get("content") or f"Generated Studio deliverable for {title}.")
+            if not raw_content.startswith("#"):
+                formatted_content = f"# {title}\n\n{raw_content}"
+            else:
+                formatted_content = raw_content
             return {
                 "ok": True,
                 "artifact_id": art_id,
-                "format": "FILE_PATH",
-                "file_path": str(target_file),
+                "format": "MARKDOWN",
+                "content": formatted_content,
                 "type": art_type,
             }
 
-        content = str(art.get("content") or f"# {art.get('title', 'Artifact')}\n\nGenerated Studio deliverable.")
+        # Invariant 2: High-bandwidth binary media streaming or file extraction to tmpfs (0o700)
+        tmpfs_dir = Path("/tmp/notebooklm-mcp-artifacts")
+        tmpfs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(tmpfs_dir, 0o700)
+        except OSError:
+            pass
+
+        final_file = tmpfs_dir / f"art_{art_id}.{ext}"
+
+        # If already downloaded and exists with positive size, return immediately
+        if final_file.exists() and final_file.stat().st_size > 0:
+            return {
+                "ok": True,
+                "status": "READY",
+                "artifact_id": art_id,
+                "format": "FILE_PATH",
+                "file_path": str(final_file),
+                "bytes_written": final_file.stat().st_size,
+                "type": art_type,
+            }
+
+        session_id = secrets.token_hex(8)
+        staging_file = tmpfs_dir / f"art_{art_id}.{ext}.part_{session_id}"
+
+        download_url = art.get("url") or art.get("download_url") or ""
+        if self._active_companion_writer is not None and download_url:
+            download_payload = {
+                "artifactId": art_id,
+                "sessionId": session_id,
+                "url": download_url,
+                "notebookId": nb_id,
+                "artifactType": art_type,
+            }
+            try:
+                res = await self.send_to_companion("download_artifact", download_payload, timeout_seconds=180.0)
+                if not res.get("ok"):
+                    staging_file.unlink(missing_ok=True)
+                    return res
+            except Exception as exc:
+                staging_file.unlink(missing_ok=True)
+                return make_error(
+                    INTERNAL,
+                    f"Artifact download failed: {exc}",
+                    retryable=True,
+                    mcp_correlation_id=correlation_id,
+                ).to_dict()
+
+        elif not final_file.exists():
+            # If no companion active / inline content fallback
+            try:
+                raw_bytes = art.get("raw_bytes")
+                if isinstance(raw_bytes, (bytes, bytearray)):
+                    payload_bytes = bytes(raw_bytes)
+                else:
+                    content_str = str(art.get("content") or f"# {art.get('title', 'Artifact')}\n\nGenerated Studio deliverable.")
+                    payload_bytes = content_str.encode("utf-8")
+
+                with open(staging_file, "wb") as f:
+                    f.write(payload_bytes)
+                os.chmod(staging_file, 0o600)
+                os.replace(staging_file, final_file)
+                os.chmod(final_file, 0o600)
+            except Exception as exc:
+                staging_file.unlink(missing_ok=True)
+                return make_error(
+                    INTERNAL,
+                    f"Failed writing artifact to file: {exc}",
+                    retryable=True,
+                    mcp_correlation_id=correlation_id,
+                ).to_dict()
+
+        bytes_written = final_file.stat().st_size if final_file.exists() else 0
         return {
             "ok": True,
+            "status": "READY",
             "artifact_id": art_id,
-            "format": "MARKDOWN",
-            "content": content,
+            "format": "FILE_PATH",
+            "file_path": str(final_file),
+            "bytes_written": bytes_written,
             "type": art_type,
+        }
+
+    async def _handle_artifact_chunk(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Handles an incoming artifact chunk with mode 0o600 staging and atomic commit."""
+        art_id = str(command.get("artifact_id") or command.get("artifactId") or "")
+        session_id = str(command.get("session_id") or command.get("sessionId") or "")
+        correlation_id = command.get("request_key") or command.get("requestId")
+
+        # Invariant: Path traversal & ID sanitization
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", art_id):
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Invalid artifact_id {art_id!r}: must match ^[a-zA-Z0-9_-]{{1,64}}$",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", session_id):
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Invalid session_id {session_id!r}: must match ^[a-zA-Z0-9_-]{{1,64}}$",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
+        art_type = str(command.get("artifact_type") or command.get("artifactType") or "AUDIO")
+        ext = self._get_artifact_extension(art_type)
+        is_last = bool(command.get("is_last") if "is_last" in command else command.get("isLast", False))
+        raw_chunk_index = command.get("chunk_index") or command.get("chunkIndex") or 0
+        chunk_index = int(raw_chunk_index)
+        chunk_base64 = command.get("chunk_base64") if "chunk_base64" in command else command.get("chunkBase64", "")
+
+        tmpfs_dir = Path("/tmp/notebooklm-mcp-artifacts")
+        tmpfs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(tmpfs_dir, 0o700)
+        except OSError:
+            pass
+
+        staging_file = tmpfs_dir / f"art_{art_id}.{ext}.part_{session_id}"
+        final_file = tmpfs_dir / f"art_{art_id}.{ext}"
+
+        try:
+            chunk_bytes = base64.b64decode(chunk_base64) if chunk_base64 else b""
+        except Exception as exc:
+            staging_file.unlink(missing_ok=True)
+            return make_error(
+                INVALID_ARGUMENT,
+                f"Failed to decode base64 chunk: {exc}",
+                retryable=False,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
+        try:
+            with open(staging_file, "ab") as f:
+                if chunk_bytes:
+                    f.write(chunk_bytes)
+                f.flush()
+            os.chmod(staging_file, 0o600)
+            bytes_written = staging_file.stat().st_size
+
+            if is_last:
+                os.replace(staging_file, final_file)
+                os.chmod(final_file, 0o600)
+                final_bytes = final_file.stat().st_size
+                return {
+                    "ok": True,
+                    "action": "artifact_chunk_ack",
+                    "artifact_id": art_id,
+                    "session_id": session_id,
+                    "chunk_index": chunk_index,
+                    "bytes_written": final_bytes,
+                    "is_last": True,
+                    "file_path": str(final_file),
+                }
+
+            return {
+                "ok": True,
+                "action": "artifact_chunk_ack",
+                "artifact_id": art_id,
+                "session_id": session_id,
+                "chunk_index": chunk_index,
+                "bytes_written": bytes_written,
+                "is_last": False,
+            }
+        except Exception as exc:
+            staging_file.unlink(missing_ok=True)
+            return make_error(
+                INTERNAL,
+                f"Failed writing artifact chunk: {exc}",
+                retryable=True,
+                mcp_correlation_id=correlation_id,
+            ).to_dict()
+
+    async def _handle_artifact_chunk_cancel(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Rollback and unlink staging file on interrupted or cancelled artifact download."""
+        art_id = str(command.get("artifact_id") or command.get("artifactId") or "")
+        session_id = str(command.get("session_id") or command.get("sessionId") or "")
+        art_type = str(command.get("artifact_type") or command.get("artifactType") or "")
+        ext = self._get_artifact_extension(art_type) if art_type else "*"
+
+        tmpfs_dir = Path("/tmp/notebooklm-mcp-artifacts")
+        if tmpfs_dir.exists():
+            for p in tmpfs_dir.glob(f"art_{art_id}.{ext}.part_{session_id}"):
+                p.unlink(missing_ok=True)
+            if not art_type:
+                for p in tmpfs_dir.glob(f"art_{art_id}.*.part_{session_id}"):
+                    p.unlink(missing_ok=True)
+        return {
+            "ok": True,
+            "action": "artifact_chunk_cancel_ack",
+            "cancelled": True,
+            "artifact_id": art_id,
+            "session_id": session_id,
         }
 
 

@@ -27,7 +27,9 @@
   ],
   "host_permissions": [
     "https://notebook.google.com/*",
-    "https://notebooklm.google.com/*"
+    "https://notebooklm.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://contribution.usercontent.google.com/*"
   ],
   "action": {
     "default_popup": "popup.html",

@@ -263,6 +263,22 @@ async function handleNativeMessage(message) {
     return;
   }
 
+  // Phase 10: Studio Artifact Retrieval Engine binary streaming
+  if (command === 'download_artifact') {
+    handleDownloadArtifact(requestId, payload).catch((err) => {
+      sendToNative({
+        requestId,
+        ok: false,
+        error: {
+          code: 'DOWNLOAD_ERROR',
+          message: err instanceof Error ? err.message : String(err),
+          retryable: true,
+        },
+      });
+    });
+    return;
+  }
+
   console.log('[service_worker] handleNativeMessage start:', command, requestId);
 
   let tab;
@@ -994,6 +1010,212 @@ function parseWxbhsfNotebooksFallback(rawBody) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 10: Studio Artifact Retrieval Engine Stream Interception
+// ---------------------------------------------------------------------------
+
+/**
+ * Safely converts a Uint8Array slice to Base64 without call-stack overflow.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+function uint8ArrayToBase64(bytes) {
+  if (!bytes || bytes.length === 0) {
+    return '';
+  }
+  const BLOCK_SIZE = 32768;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += BLOCK_SIZE) {
+    const chunk = bytes.subarray(i, i + BLOCK_SIZE);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Downloads a Studio binary artifact with stream slicing, safe Base64 encoding,
+ * and ACK-based backpressure flow control to the native host / broker.
+ *
+ * @param {string} requestId
+ * @param {object} payload
+ */
+async function handleDownloadArtifact(requestId, payload) {
+  const url = payload?.url || payload?.downloadUrl || payload?.download_url;
+  const artifactId = payload?.artifactId || payload?.artifact_id;
+  const sessionId = payload?.sessionId || payload?.session_id;
+  const artifactType = payload?.artifactType || payload?.artifact_type || 'AUDIO';
+
+  if (!url) {
+    sendToNative({
+      requestId,
+      ok: false,
+      error: { code: 'INVALID_URL', message: 'No artifact download URL provided.', retryable: false },
+    });
+    return;
+  }
+
+  const CHUNK_SIZE = 524288; // <= 512 KiB (524,288 bytes)
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+    });
+  } catch (err) {
+    try {
+      await sendBrokerCommand('artifact_chunk_cancel', {
+        artifactId,
+        sessionId,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    } catch (_e) {}
+    sendToNative({
+      requestId,
+      ok: false,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: `Failed to fetch artifact: ${err instanceof Error ? err.message : String(err)}`,
+        retryable: true,
+      },
+    });
+    return;
+  }
+
+  if (!response.ok) {
+    try {
+      await sendBrokerCommand('artifact_chunk_cancel', {
+        artifactId,
+        sessionId,
+        reason: `HTTP ${response.status}`,
+      });
+    } catch (_e) {}
+    sendToNative({
+      requestId,
+      ok: false,
+      error: {
+        code: 'HTTP_ERROR',
+        message: `Artifact download failed with status ${response.status} ${response.statusText}`,
+        retryable: response.status >= 500,
+      },
+    });
+    return;
+  }
+
+  if (!response.body) {
+    sendToNative({
+      requestId,
+      ok: false,
+      error: { code: 'EMPTY_BODY', message: 'Response body is empty.', retryable: false },
+    });
+    return;
+  }
+
+  const reader = response.body.getReader();
+  let buffer = new Uint8Array(0);
+  let chunkIndex = 0;
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (value && value.length > 0) {
+        const newBuf = new Uint8Array(buffer.length + value.length);
+        newBuf.set(buffer, 0);
+        newBuf.set(value, buffer.length);
+        buffer = newBuf;
+      }
+
+      // Flush full CHUNK_SIZE slices
+      while (buffer.length >= CHUNK_SIZE && !done) {
+        const slice = buffer.subarray(0, CHUNK_SIZE);
+        buffer = buffer.subarray(CHUNK_SIZE);
+        totalBytes += slice.length;
+
+        const base64Str = uint8ArrayToBase64(slice);
+        const ack = await sendBrokerCommand('artifact_chunk', {
+          artifactId,
+          sessionId,
+          chunkIndex: chunkIndex++,
+          chunkBase64: base64Str,
+          artifactType,
+          isLast: false,
+        });
+
+        if (!ack || !ack.ok) {
+          throw new Error(ack?.error?.message || 'Broker rejected artifact chunk.');
+        }
+      }
+
+      if (done) {
+        while (buffer.length > CHUNK_SIZE) {
+          const slice = buffer.subarray(0, CHUNK_SIZE);
+          buffer = buffer.subarray(CHUNK_SIZE);
+          totalBytes += slice.length;
+          const base64Str = uint8ArrayToBase64(slice);
+          const ack = await sendBrokerCommand('artifact_chunk', {
+            artifactId,
+            sessionId,
+            chunkIndex: chunkIndex++,
+            chunkBase64: base64Str,
+            artifactType,
+            isLast: false,
+          });
+          if (!ack || !ack.ok) {
+            throw new Error(ack?.error?.message || 'Broker rejected artifact chunk.');
+          }
+        }
+
+        totalBytes += buffer.length;
+        const lastBase64 = uint8ArrayToBase64(buffer);
+        const finalAck = await sendBrokerCommand('artifact_chunk', {
+          artifactId,
+          sessionId,
+          chunkIndex: chunkIndex++,
+          chunkBase64: lastBase64,
+          artifactType,
+          isLast: true,
+        });
+
+        if (!finalAck || !finalAck.ok) {
+          throw new Error(finalAck?.error?.message || 'Broker failed to commit final artifact chunk.');
+        }
+
+        sendToNative({
+          requestId,
+          ok: true,
+          artifactId,
+          sessionId,
+          totalBytes,
+          filePath: finalAck.file_path || finalAck.filePath,
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    try {
+      await reader.cancel();
+    } catch (_e) {}
+    try {
+      await sendBrokerCommand('artifact_chunk_cancel', {
+        artifactId,
+        sessionId,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    } catch (_e) {}
+
+    sendToNative({
+      requestId,
+      ok: false,
+      error: {
+        code: 'STREAM_ERROR',
+        message: `Artifact stream error: ${err instanceof Error ? err.message : String(err)}`,
+        retryable: true,
+      },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tab recycling
 // ---------------------------------------------------------------------------
 
@@ -1030,4 +1252,6 @@ globalThis.getSessionStorageKey = getSessionStorageKey;
 globalThis.queryScottySessionOffset = queryScottySessionOffset;
 globalThis.executeResumableScottyUpload = executeResumableScottyUpload;
 globalThis.handleScottyChunkSW = handleScottyChunkSW;
+globalThis.uint8ArrayToBase64 = uint8ArrayToBase64;
+globalThis.handleDownloadArtifact = handleDownloadArtifact;
 
