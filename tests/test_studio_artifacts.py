@@ -17,6 +17,7 @@ import base64
 import json
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any, AsyncGenerator
 from unittest.mock import AsyncMock, patch
 
@@ -279,7 +280,8 @@ async def test_extract_artifact_text_vs_binary_tmpfs(mock_broker: BrokerDaemon) 
         file_path = Path(res_binary["file_path"])
         assert file_path.exists()
         assert file_path.parent == Path("/tmp/notebooklm-mcp-artifacts")
-        assert (file_path.stat().st_mode & 0o777) == 0o600
+        if sys.platform != "win32":
+            assert (file_path.stat().st_mode & 0o777) == 0o600
 
         # 3. Extracting an artifact that is still GENERATING fails non-blocking with OPERATION_IN_PROGRESS
         res_gen = await mock_broker.dispatch({
@@ -373,7 +375,8 @@ async def test_artifact_chunk_ack_backpressure_and_atomic_commit(mock_broker: Br
 
     # Verify staging file exists with mode 0o600, final file does not exist yet
     assert staging_file.exists()
-    assert (staging_file.stat().st_mode & 0o777) == 0o600
+    if sys.platform != "win32":
+        assert (staging_file.stat().st_mode & 0o777) == 0o600
     assert not final_file.exists()
 
     # Chunk 1: 128 bytes, is_last=True -> triggers atomic commit
@@ -401,7 +404,8 @@ async def test_artifact_chunk_ack_backpressure_and_atomic_commit(mock_broker: Br
     assert not staging_file.exists()
     assert final_file.exists()
     assert final_file.stat().st_size == 192
-    assert (final_file.stat().st_mode & 0o777) == 0o600
+    if sys.platform != "win32":
+        assert (final_file.stat().st_mode & 0o777) == 0o600
 
     # Cleanup
     final_file.unlink(missing_ok=True)
