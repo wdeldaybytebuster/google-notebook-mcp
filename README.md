@@ -74,6 +74,7 @@ flowchart TD
 ## Key Features
 
 - **12 Production MCP Tools**: Grounded natural-language Q&A with Unicode citation spans, source cataloging, note creation/listing/deletion, binary file ingestion via Scotty, and studio artifact querying/metadata/extraction.
+- **Self-Healing Wire Adapters & Upstream Drift Resilience**: Decoupled declarative wire specification (`wire_spec.v4.json`) with Ed25519 cryptographic signature verification, air-gapped User Vault isolation, dynamic DOM selector relay without extension reinstalls, and an automated 10-minute health window with atomic rollback to Last Known Good (LKG).
 - **MCP 2025/2026 Protocol Standardization**: First-class MCP resources (`notebooklm://`), parameter-validated prompt templates (`prompts/*`), live progress notifications (`notifications/progress`), and standardized behavioral tool annotations (`readOnlyHint`, `idempotentHint`).
 - **ADR-011 Interactive Session Lock**: Enforces single-notebook locking per session, preventing accidental cross-notebook queries or modifications.
 - **Project Directory Binding (`.notebook_mcp.json`)**: Seamlessly binds local workspaces to their designated NotebookLM notebook with an interactive in-chat confirmation handshake.
@@ -306,6 +307,18 @@ The repository packages four production agent skills adhering to the Anthropic a
 | **`adversarial-consultation-planner`** | Closed-loop consultation planning with live models, spec-vs-plan decoupling, 5-domain adversarial red-team stress-testing, and remediation invariant synthesis. |
 
 *Detailed skill instructions and state schemas are available in [docs/agent-skills.md](docs/agent-skills.md).*
+
+---
+
+## Self-Healing Wire Adapters & Upstream Drift Resilience
+
+Google NotebookLM is an evolving web application that periodically updates internal RPC IDs, payload structures, DOM global property names, and batchexecute array layouts. The gateway incorporates a zero-friction, cryptographic self-healing engine to adapt automatically without requiring manual code changes or user intervention:
+
+1. **Decoupled Wire Specification (`wire_spec.v4.json`)**: All volatile RPC IDs (`wXbhsf`, `rLM1Ne`, `CYK0Xb`, `tGMBJ`, `o4cbdc`, `izAoDd`, `GenerateFreeFormStreamed`), row array indices, endpoints, and DOM selector keys are defined declaratively outside compiled code.
+2. **Cryptographic Ed25519 Pre-Validation**: Dynamic updates are cryptographically signed. The gateway verifies detached signatures strictly on raw un-parsed bytes using a pinned 32-byte Ed25519 public key before decoding JSON.
+3. **Air-Gapped Vault Isolation**: The User Vault (`~/.config/notebooklm-mcp-bridge/`) containing `allowlist.json`, `.notebook_mcp.json`, and `journal.db` is strictly read-only to the update engine. All adapter files live in isolated Dynamic Adapter Storage (`~/.local/share/notebooklm-mcp-bridge/adapters/`).
+4. **Dynamic DOM Relay Protocol**: Property paths and CSRF identifiers are relayed dynamically to the Chrome extension companion, allowing DOM target evolution without requiring Chrome Web Store extension updates.
+5. **Atomic LKG Rollback & 10-Minute Health Window**: Every new candidate spec must pass synthetic canary parsing before activation. Once promoted, a 10-minute active health monitor tracks live request status; if 3 consecutive RPC failures or schema drift errors occur, the gateway automatically quarantines the spec hash and triggers an atomic rollback to Last Known Good (LKG) or the package-bundled static default.
 
 ---
 
