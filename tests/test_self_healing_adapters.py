@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import stat
-from typing import Any
+import sys
+from typing import Any, cast
 import pytest
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -72,7 +73,7 @@ def sample_valid_spec_text() -> str:
 @pytest.fixture
 def rlm_fixture() -> dict[str, Any]:
     path = Path(__file__).parent / "fixtures" / "rLM1Ne_canary_fixture.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +191,9 @@ def test_invariant_4_state_persistence_and_file_mode(test_dirs: tuple[Path, Path
     # Verify state file exists and has 0o600 permissions
     state_file = adapter_dir / "adapter_state.json"
     assert state_file.exists()
-    mode = stat.S_IMODE(state_file.stat().st_mode)
-    assert mode == 0o600
+    if sys.platform != "win32":
+        mode = stat.S_IMODE(state_file.stat().st_mode)
+        assert mode == 0o600
 
     # Reload fresh agent instance and assert state restored
     fresh_agent = UpdateAgent(adapter_dir=adapter_dir, vault_dir=vault_dir)
