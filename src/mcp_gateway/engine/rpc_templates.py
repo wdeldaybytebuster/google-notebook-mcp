@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote_plus
 
+from mcp_gateway.engine.adapters import AdapterConfig
+
 # ---------------------------------------------------------------------------
 # URL constants
 # ---------------------------------------------------------------------------
@@ -352,6 +354,6 @@ def make_query_params(
         message_id,               # [5]  client message UUID
         None,                     # [6]  reserved
         notebook_id,              # [7]  target notebook UUID
-        1,                        # [8]  origin=QUERY_ORIGIN_CHAT_TEXT_BOX
+        int(AdapterConfig.get_current_spec().rpc_descriptors.get("query_stream", {}).get("query_origin", 1)),  # [8]  origin=QUERY_ORIGIN_CHAT_TEXT_BOX
     ]
     return json.dumps(params)

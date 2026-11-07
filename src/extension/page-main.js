@@ -28,27 +28,86 @@ const QUERY_URL =
   'https://notebook.google.com/_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1.LabsTailwindOrchestrationService/GenerateFreeFormStreamed';
 
 // ---------------------------------------------------------------------------
-// Auth context — values remain in page scope, never forwarded
+// Auth context & Invariant 5 DOM property resolution
 // ---------------------------------------------------------------------------
+
+const FORBIDDEN_DOM_IDENTIFIERS = new Set(['__proto__', 'constructor', 'prototype']);
+const SAFE_DOM_IDENTIFIER_REGEX = /^[a-zA-Z0-9_$]{1,64}$/;
+
+/**
+ * Safely resolves a property on target object (defaulting to window.WIZ_global_data).
+ * Enforces INVARIANT 5: Prohibits prototype pollution and never uses eval().
+ *
+ * @param {string} targetKey
+ * @param {object} [sourceObj]
+ * @returns {string}
+ */
+function resolveDomPropertySafely(targetKey, sourceObj = null) {
+  if (!targetKey || typeof targetKey !== 'string') {
+    return '';
+  }
+  if (!SAFE_DOM_IDENTIFIER_REGEX.test(targetKey)) {
+    return '';
+  }
+  if (FORBIDDEN_DOM_IDENTIFIERS.has(targetKey)) {
+    return '';
+  }
+
+  const obj = sourceObj ?? window.WIZ_global_data ?? {};
+  if (obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, targetKey)) {
+    const val = obj[targetKey];
+    return typeof val === 'string' ? val : (val != null ? String(val) : '');
+  }
+  return '';
+}
 
 /**
  * Reads page-resident auth identifiers from WIZ_global_data.
+ * Supports dynamic dom_targets relay (Invariant 9).
  * The returned object stays inside page-main.js; it is NEVER posted back
  * to content_script or the service worker.
  *
+ * @param {object} [domTargets]
  * @returns {{ snlm0e: string, fdrfje: string, authuser: number, accountEmail: string }}
  */
-function getAuthContext() {
+function getAuthContext(domTargets = null) {
   const wiz = window.WIZ_global_data ?? {};
 
-  const snlm0e = typeof wiz.SNlM0e === 'string' ? wiz.SNlM0e : '';
-  const fdrfje = typeof wiz.FdrFJe === 'string' ? wiz.FdrFJe : '';
-  const accountEmail = (
-    (typeof wiz.oPEP7c === 'string' && wiz.oPEP7c.includes('@') ? wiz.oPEP7c : '') ||
-    (typeof wiz.oM1Kwf === 'string' && wiz.oM1Kwf.includes('@') ? wiz.oM1Kwf : '') ||
-    Object.values(wiz).find((v) => typeof v === 'string' && v.includes('@') && v.includes('.')) ||
-    ''
-  ).trim().toLowerCase();
+  // Resolve CSRF token (SNlM0e) dynamically or with fallback
+  let snlm0e = '';
+  if (domTargets && typeof domTargets.xsrf_token === 'string') {
+    snlm0e = resolveDomPropertySafely(domTargets.xsrf_token, wiz);
+  }
+  if (!snlm0e && typeof wiz.SNlM0e === 'string') {
+    snlm0e = wiz.SNlM0e;
+  }
+
+  // Resolve session ID (FdrFJe) dynamically or with fallback
+  let fdrfje = '';
+  if (domTargets && typeof domTargets.session_id === 'string') {
+    fdrfje = resolveDomPropertySafely(domTargets.session_id, wiz);
+  }
+  if (!fdrfje && typeof wiz.FdrFJe === 'string') {
+    fdrfje = wiz.FdrFJe;
+  }
+
+  // Resolve user email dynamically or with fallback
+  let accountEmail = '';
+  if (domTargets && typeof domTargets.user_email === 'string') {
+    accountEmail = resolveDomPropertySafely(domTargets.user_email, wiz);
+  }
+  if (!accountEmail && domTargets && typeof domTargets.user_email_alt === 'string') {
+    accountEmail = resolveDomPropertySafely(domTargets.user_email_alt, wiz);
+  }
+  if (!accountEmail) {
+    accountEmail = (
+      (typeof wiz.oPEP7c === 'string' && wiz.oPEP7c.includes('@') ? wiz.oPEP7c : '') ||
+      (typeof wiz.oM1Kwf === 'string' && wiz.oM1Kwf.includes('@') ? wiz.oM1Kwf : '') ||
+      Object.values(wiz).find((v) => typeof v === 'string' && v.includes('@') && v.includes('.')) ||
+      ''
+    );
+  }
+  accountEmail = accountEmail.trim().toLowerCase();
 
   // Extract /u/{N}/ from the current pathname; default to 0.
   const match = window.location.pathname.match(/\/u\/(\d+)\//);
@@ -175,8 +234,8 @@ function verifyAccountIdentityPreflight(command, payload) {
  * @param {string | null} notebookId
  * @returns {Promise<{ok: true, body: string} | {ok: false, error: {code: string, message: string, retryable: boolean}}>}
  */
-async function executeBatchexecute(rpcId, paramsJson, notebookId, traceparent = null) {
-  const auth = getAuthContext();
+async function executeBatchexecute(rpcId, paramsJson, notebookId, traceparent = null, domTargets = null) {
+  const auth = getAuthContext(domTargets);
   if (!auth.snlm0e) {
     return {
       ok: false,
@@ -275,8 +334,8 @@ async function executeBatchexecute(rpcId, paramsJson, notebookId, traceparent = 
  * @param {string} paramsJson
  * @returns {Promise<{ok: true, body: string} | {ok: false, error: {code: string, message: string, retryable: boolean}}>}
  */
-async function executeQueryStream(paramsJson, traceparent = null) {
-  const auth = getAuthContext();
+async function executeQueryStream(paramsJson, traceparent = null, domTargets = null) {
+  const auth = getAuthContext(domTargets);
   if (!auth.snlm0e) {
     return {
       ok: false,
@@ -702,14 +761,16 @@ window.addEventListener('message', async (event) => {
           payload.rpcId,
           payload.paramsJson,
           payload.notebookId ?? null,
-          payload.traceparent ?? null
+          payload.traceparent ?? null,
+          payload.domTargets ?? payload.dom_targets ?? null
         );
         break;
 
       case 'query_stream':
         result = await executeQueryStream(
           payload.paramsJson,
-          payload.traceparent ?? null
+          payload.traceparent ?? null,
+          payload.domTargets ?? payload.dom_targets ?? null
         );
         break;
 
@@ -797,5 +858,7 @@ window.addEventListener('message', async (event) => {
   globalThis.inspectRequestBodySafely = inspectRequestBodySafely;
   globalThis.executeBatchexecute = executeBatchexecute;
   globalThis.executeQueryStream = executeQueryStream;
+  globalThis.resolveDomPropertySafely = resolveDomPropertySafely;
+  globalThis.getAuthContext = getAuthContext;
 })();
 }

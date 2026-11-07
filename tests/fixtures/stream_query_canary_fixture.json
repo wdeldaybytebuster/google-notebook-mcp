@@ -1,0 +1,7 @@
+{
+  "chunks": [
+    "[[\"Synthetic canary stream response chunk 1: Grounded answer text.\"]]\n",
+    "[null]\n"
+  ],
+  "expected_text": "Synthetic canary stream response chunk 1: Grounded answer text."
+}

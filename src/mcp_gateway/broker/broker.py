@@ -48,6 +48,8 @@ from mcp_gateway.broker.allowlist import (
     save_allowlist,
 )
 from mcp_gateway.broker.secret_scrubber import scrub_dict
+from mcp_gateway.engine.adapters import AdapterConfig
+from mcp_gateway.broker.update_agent import UpdateAgent
 from mcp_gateway.engine.coordinate import CitationSpan, normalize_citation
 from mcp_gateway.engine.readiness_poller import (
     SourceStatus,
@@ -164,6 +166,7 @@ class BrokerConfig:
     allowlist_path: Path | None = None
     journal_db_path: Path | None = None
     capability_secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
+    adapter_dir: Path | None = None
 
 
 class BrokerDaemon:
@@ -171,6 +174,8 @@ class BrokerDaemon:
 
     def __init__(self, config: BrokerConfig | None = None) -> None:
         self.config = config or BrokerConfig()
+        self.adapter_config = AdapterConfig.get_instance(self.config.adapter_dir)
+        self.update_agent = UpdateAgent(adapter_dir=self.config.adapter_dir)
         self.allowlist_config: AllowlistConfig = AllowlistConfig(
             version=2,
             provider_mode="browser",
@@ -448,6 +453,17 @@ class BrokerDaemon:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending_responses[request_id] = fut
+
+        # INVARIANT 9: Inject dynamic DOM selectors into companion payload
+        if "domTargets" not in payload and "dom_targets" not in payload:
+            spec = self.adapter_config.get_spec()
+            dom_targets = {
+                "xsrf_token": spec.get_dom_selector("xsrf_token_variable", "SNlM0e"),
+                "session_id": spec.get_dom_selector("session_id_variable", "FdrFJe"),
+                "user_email": spec.get_dom_selector("wiz_global_email", "oM1Kwf"),
+                "user_email_alt": spec.get_dom_selector("wiz_global_email_alt", "oPEP7c"),
+            }
+            payload["domTargets"] = dom_targets
 
         msg = {
             "command": command,
@@ -744,8 +760,9 @@ class BrokerDaemon:
 
     async def _fetch_all_discovered_notebooks(self) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         """Fetches all visible notebooks from wXbhsf without allowlist or session filtering."""
+        rpc_id = self.adapter_config.get_spec().get_rpc_id("list_notebooks", "wXbhsf")
         rpc_payload = make_list_notebooks_payload(page_size=100)
-        rpc_msg: dict[str, Any] = {"rpcId": "wXbhsf", "paramsJson": rpc_payload}
+        rpc_msg: dict[str, Any] = {"rpcId": rpc_id, "paramsJson": rpc_payload}
         self._attach_identity_preflight(rpc_msg)
         res = await self.send_to_companion("batchexecute", rpc_msg)
         if not res.get("ok"):
@@ -758,7 +775,7 @@ class BrokerDaemon:
         notebooks: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         for record in records:
-            if record.get("rpc_id") == "wXbhsf":
+            if record.get("rpc_id") == rpc_id or record.get("rpc_id") == "wXbhsf":
                 raw_items = record.get("data")
                 if isinstance(raw_items, list):
                     items_list = raw_items
@@ -1095,10 +1112,11 @@ class BrokerDaemon:
 
     async def _handle_get_notebook_metadata(self, command: dict[str, Any]) -> dict[str, Any]:
         nb_id = str(command["notebook_id"])
+        rpc_id = self.adapter_config.get_spec().get_rpc_id("get_notebook_metadata", "rLM1Ne")
         rpc_payload = make_get_metadata_payload(nb_id)
         res = await self.send_to_companion(
             "batchexecute",
-            {"rpcId": "rLM1Ne", "paramsJson": rpc_payload, "notebookId": nb_id},
+            {"rpcId": rpc_id, "paramsJson": rpc_payload, "notebookId": nb_id},
         )
         if not res.get("ok"):
             return res
@@ -1109,7 +1127,7 @@ class BrokerDaemon:
 
         metadata: dict[str, Any] = {"notebook_id": nb_id, "raw": None}
         for record in records:
-            if record.get("rpc_id") == "rLM1Ne":
+            if record.get("rpc_id") == rpc_id or record.get("rpc_id") == "rLM1Ne":
                 metadata["raw"] = record.get("data")
                 break
 
@@ -1120,10 +1138,11 @@ class BrokerDaemon:
         page_size_arg = command.get("page_size")
         cursor = command.get("cursor")
 
+        rpc_id = self.adapter_config.get_spec().get_rpc_id("get_notebook_metadata", "rLM1Ne")
         rpc_payload = make_get_metadata_payload(nb_id)
         res = await self.send_to_companion(
             "batchexecute",
-            {"rpcId": "rLM1Ne", "paramsJson": rpc_payload, "notebookId": nb_id},
+            {"rpcId": rpc_id, "paramsJson": rpc_payload, "notebookId": nb_id},
         )
         if not res.get("ok"):
             return res
@@ -1134,7 +1153,7 @@ class BrokerDaemon:
 
         raw_sources: list[Any] = []
         for record in records:
-            if record.get("rpc_id") == "rLM1Ne":
+            if record.get("rpc_id") == rpc_id or record.get("rpc_id") == "rLM1Ne":
                 data = record.get("data")
                 if isinstance(data, list):
                     # In live wire format, data[0] is the notebook entry, where data[0][1] is a list of document sources
@@ -1474,13 +1493,15 @@ class BrokerDaemon:
 
         assigned_source_id: str | None = None
         file_bytes: bytes = b""
+        spec = self.adapter_config.get_spec()
         if source_type == "text":
             payload = make_add_text_payload(
                 title=str(source.get("title", "Untitled")),
                 content=str(source.get("content", "")),
                 notebook_id=nb_id,
             )
-            rpc_msg = {"rpcId": "CYK0Xb", "paramsJson": payload, "notebookId": nb_id}
+            rpc_id = spec.get_rpc_id("create_note", "CYK0Xb")
+            rpc_msg = {"rpcId": rpc_id, "paramsJson": payload, "notebookId": nb_id}
             self._attach_identity_preflight(rpc_msg, command)
             res = await self.send_to_companion("batchexecute", rpc_msg)
             if res.get("ok"):
@@ -1499,12 +1520,14 @@ class BrokerDaemon:
                             pass
             # Fallback to izAoDd if CYK0Xb returned no source id (e.g. in mock companion)
             if not assigned_source_id:
-                rpc_fallback = {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id}
+                fallback_id = spec.get_rpc_id("add_source_url", "izAoDd")
+                rpc_fallback = {"rpcId": fallback_id, "paramsJson": payload, "notebookId": nb_id}
                 self._attach_identity_preflight(rpc_fallback, command)
                 res = await self.send_to_companion("batchexecute", rpc_fallback)
         elif source_type in ("url", "youtube"):
             payload = make_add_url_payload(url=str(source["url"]), notebook_id=nb_id)
-            rpc_msg = {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id}
+            rpc_id = spec.get_rpc_id("add_source_url", "izAoDd")
+            rpc_msg = {"rpcId": rpc_id, "paramsJson": payload, "notebookId": nb_id}
             self._attach_identity_preflight(rpc_msg, command)
             res = await self.send_to_companion("batchexecute", rpc_msg)
         elif source_type == "drive":
@@ -1514,7 +1537,8 @@ class BrokerDaemon:
                 title=str(source.get("title", "")),
                 notebook_id=nb_id,
             )
-            rpc_msg = {"rpcId": "izAoDd", "paramsJson": payload, "notebookId": nb_id}
+            rpc_id = spec.get_rpc_id("add_source_drive", "izAoDd")
+            rpc_msg = {"rpcId": rpc_id, "paramsJson": payload, "notebookId": nb_id}
             self._attach_identity_preflight(rpc_msg, command)
             res = await self.send_to_companion("batchexecute", rpc_msg)
         elif source_type == "file":
@@ -1537,7 +1561,8 @@ class BrokerDaemon:
                 filename=str(source.get("title", "uploaded_file")),
                 notebook_id=nb_id,
             )
-            rpc_msg = {"rpcId": "o4cbdc", "paramsJson": payload, "notebookId": nb_id}
+            rpc_id = spec.get_rpc_id("upload_intent", "o4cbdc")
+            rpc_msg = {"rpcId": rpc_id, "paramsJson": payload, "notebookId": nb_id}
             self._attach_identity_preflight(rpc_msg, command)
             res = await self.send_to_companion("batchexecute", rpc_msg)
         else:
@@ -1703,7 +1728,8 @@ class BrokerDaemon:
         self.journal.transition(idempotency_key, MutationState.SENT)
 
         payload = make_create_note_payload(title=title, content=content, notebook_id=nb_id)
-        rpc_msg = {"rpcId": "CYK0Xb", "paramsJson": payload, "notebookId": nb_id}
+        rpc_id = self.adapter_config.get_spec().get_rpc_id("create_note", "CYK0Xb")
+        rpc_msg = {"rpcId": rpc_id, "paramsJson": payload, "notebookId": nb_id}
         self._attach_identity_preflight(rpc_msg, command)
         res = await self.send_to_companion("batchexecute", rpc_msg)
 
@@ -1720,7 +1746,7 @@ class BrokerDaemon:
         decoder = BatchexecuteStreamDecoder()
         records = decoder.feed(body.encode("utf-8"))
         for rec in records:
-            if rec.get("rpc_id") == "CYK0Xb":
+            if rec.get("rpc_id") == rpc_id or rec.get("rpc_id") == "CYK0Xb":
                 data = rec.get("data")
                 cur = data
                 while isinstance(cur, list) and cur:
@@ -1757,10 +1783,12 @@ class BrokerDaemon:
     async def _handle_list_notes(self, command: dict[str, Any]) -> dict[str, Any]:
         nb_id = str(command["notebook_id"])
         correlation_id = command.get("request_key") or command.get("idempotency_key")
+        rpc_id = self.adapter_config.get_spec().get_rpc_id("get_notebook_metadata", "rLM1Ne")
+        notes_index = self.adapter_config.get_spec().get_row_index("get_notebook_metadata", "user_notes", 17)
         rpc_payload = make_get_metadata_payload(nb_id)
         res = await self.send_to_companion(
             "batchexecute",
-            {"rpcId": "rLM1Ne", "paramsJson": rpc_payload, "notebookId": nb_id},
+            {"rpcId": rpc_id, "paramsJson": rpc_payload, "notebookId": nb_id},
         )
         if not res.get("ok"):
             return res
@@ -1773,9 +1801,10 @@ class BrokerDaemon:
         raw_notes: list[Any] = []
 
         for record in records:
-            if record.get("rpc_id") == "rLM1Ne":
+            if record.get("rpc_id") == rpc_id or record.get("rpc_id") == "rLM1Ne":
                 data = record.get("data")
                 if not isinstance(data, list) or len(data) == 0 or not isinstance(data[0], list):
+                    self.update_agent.record_rpc_failure()
                     return make_error(
                         UPSTREAM_SCHEMA_DRIFT,
                         f"Invalid rLM1Ne response envelope structure: {type(data)}",
@@ -1786,28 +1815,32 @@ class BrokerDaemon:
                 container = data[0]
                 found_container = True
 
-                # Loud Canary: Verify index 17 existence and signature (M-05)
-                if len(container) <= 17:
+                # Loud Canary: Verify notes_index existence and signature (M-05)
+                if len(container) <= notes_index:
+                    self.update_agent.record_rpc_failure()
                     return make_error(
                         UPSTREAM_SCHEMA_DRIFT,
-                        f"rLM1Ne container length is {len(container)} (expected > 17 for notes array). Upstream schema shifted.",
+                        f"rLM1Ne container length is {len(container)} (expected > {notes_index} for notes array). Upstream schema shifted.",
                         retryable=False,
                         mcp_correlation_id=correlation_id,
                     ).to_dict()
 
-                notes_array = container[17]
+                notes_array = container[notes_index]
                 if not isinstance(notes_array, list):
+                    self.update_agent.record_rpc_failure()
                     return make_error(
                         UPSTREAM_SCHEMA_DRIFT,
-                        f"rLM1Ne container[17] is not an array (type: {type(notes_array)}). Upstream schema shifted.",
+                        f"rLM1Ne container[{notes_index}] is not an array (type: {type(notes_array)}). Upstream schema shifted.",
                         retryable=False,
                         mcp_correlation_id=correlation_id,
                     ).to_dict()
 
                 raw_notes = notes_array
+                self.update_agent.record_rpc_success()
                 break
 
         if not found_container:
+            self.update_agent.record_rpc_failure()
             return make_error(
                 UPSTREAM_SCHEMA_DRIFT,
                 "rLM1Ne record missing from response stream.",
@@ -1906,7 +1939,8 @@ class BrokerDaemon:
         self.journal.transition(idempotency_key, MutationState.SENT)
 
         payload = make_delete_note_payload(note_id=note_id, notebook_id=nb_id)
-        rpc_msg = {"rpcId": "tGMBJ", "paramsJson": payload, "notebookId": nb_id}
+        rpc_id = self.adapter_config.get_spec().get_rpc_id("delete_note", "tGMBJ")
+        rpc_msg = {"rpcId": rpc_id, "paramsJson": payload, "notebookId": nb_id}
         self._attach_identity_preflight(rpc_msg, command)
         res = await self.send_to_companion("batchexecute", rpc_msg)
 
@@ -1952,10 +1986,12 @@ class BrokerDaemon:
                 mcp_correlation_id=correlation_id,
             ).to_dict()
 
+        rpc_id = self.adapter_config.get_spec().get_rpc_id("get_notebook_metadata", "rLM1Ne")
+        artifacts_index = self.adapter_config.get_spec().get_row_index("get_notebook_metadata", "artifacts", 18)
         rpc_payload = make_get_metadata_payload(nb_id)
         res = await self.send_to_companion(
             "batchexecute",
-            {"rpcId": "rLM1Ne", "paramsJson": rpc_payload, "notebookId": nb_id},
+            {"rpcId": rpc_id, "paramsJson": rpc_payload, "notebookId": nb_id},
         )
         if not res.get("ok"):
             return res
@@ -1967,10 +2003,11 @@ class BrokerDaemon:
         rlm_found = False
         raw_artifacts: list[Any] = []
         for record in records:
-            if record.get("rpc_id") == "rLM1Ne":
+            if record.get("rpc_id") == rpc_id or record.get("rpc_id") == "rLM1Ne":
                 rlm_found = True
                 data = record.get("data")
                 if not isinstance(data, list) or len(data) == 0 or not isinstance(data[0], list):
+                    self.update_agent.record_rpc_failure()
                     return make_error(
                         UPSTREAM_SCHEMA_DRIFT,
                         f"Invalid rLM1Ne response envelope structure: {type(data)}",
@@ -1980,27 +2017,31 @@ class BrokerDaemon:
 
                 container = data[0]
                 # Invariant 4 canary: Check container length
-                if len(container) <= 18:
+                if len(container) <= artifacts_index:
+                    self.update_agent.record_rpc_failure()
                     return make_error(
                         UPSTREAM_SCHEMA_DRIFT,
-                        f"rLM1Ne container length is {len(container)} (expected > 18 for artifacts array). Upstream schema shifted.",
+                        f"rLM1Ne container length is {len(container)} (expected > {artifacts_index} for artifacts array). Upstream schema shifted.",
                         retryable=False,
                         mcp_correlation_id=correlation_id,
                     ).to_dict()
 
-                artifacts_array = container[18]
+                artifacts_array = container[artifacts_index]
                 if not isinstance(artifacts_array, list):
+                    self.update_agent.record_rpc_failure()
                     return make_error(
                         UPSTREAM_SCHEMA_DRIFT,
-                        f"rLM1Ne container[18] is not an array (type: {type(artifacts_array)}). Upstream schema shifted.",
+                        f"rLM1Ne container[{artifacts_index}] is not an array (type: {type(artifacts_array)}). Upstream schema shifted.",
                         retryable=False,
                         mcp_correlation_id=correlation_id,
                     ).to_dict()
 
                 raw_artifacts = artifacts_array
+                self.update_agent.record_rpc_success()
                 break
 
         if not rlm_found:
+            self.update_agent.record_rpc_failure()
             return make_error(
                 UPSTREAM_SCHEMA_DRIFT,
                 "rLM1Ne record missing from response stream.",

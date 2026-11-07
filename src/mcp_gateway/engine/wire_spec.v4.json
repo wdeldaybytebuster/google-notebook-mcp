@@ -1,0 +1,80 @@
+{
+  "$schema_version": "4.1.0",
+  "min_broker_version": "3.1.0",
+  "rpc_descriptors": {
+    "list_notebooks": {
+      "method_id": "wXbhsf",
+      "request_template": "[[[\"wXbhsf\", \"[]\", null, \"generic\"]]]",
+      "response_mapping": {
+        "root_array_index": 0,
+        "notebook_list_index": 0,
+        "fields": {
+          "id": 0,
+          "title": 1,
+          "source_count": 2,
+          "updated_at_ms": 3
+        }
+      }
+    },
+    "get_notebook_metadata": {
+      "method_id": "rLM1Ne",
+      "rows": {
+        "source_catalog": {
+          "row_index": 102,
+          "fields": {
+            "id": 0,
+            "title": 1,
+            "type": 2,
+            "status": 3
+          }
+        },
+        "user_notes": {
+          "row_index": 17,
+          "fields": {
+            "id": 0,
+            "title": 1,
+            "content": 2
+          }
+        },
+        "artifacts": {
+          "row_index": 18,
+          "fields": {
+            "id": 0,
+            "title": 1,
+            "type": 2,
+            "status": 3
+          }
+        }
+      }
+    },
+    "create_note": {
+      "method_id": "CYK0Xb",
+      "param_structure": "[\"{notebook_id}\", \"{title}\", \"{content}\"]"
+    },
+    "delete_note": {
+      "method_id": "tGMBJ",
+      "param_structure": "[\"{note_id}\"]"
+    },
+    "upload_intent": {
+      "method_id": "o4cbdc",
+      "unpack_depth": 2
+    },
+    "add_source_url": {
+      "method_id": "izAoDd"
+    },
+    "add_source_drive": {
+      "method_id": "izAoDd"
+    },
+    "query_stream": {
+      "endpoint_url": "https://notebook.google.com/_/LabsTailwindUi/data/google.internal.labs.tailwind.orchestration.v1.LabsTailwindOrchestrationService/GenerateFreeFormStreamed",
+      "query_origin": 1
+    }
+  },
+  "dom_selectors": {
+    "wiz_global_email": "oM1Kwf",
+    "wiz_global_email_alt": "oPEP7c",
+    "xsrf_token_variable": "SNlM0e",
+    "session_id_variable": "FdrFJe",
+    "build_label_variable": "cfb2h"
+  }
+}

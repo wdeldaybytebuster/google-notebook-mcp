@@ -1,0 +1,36 @@
+{
+  "rpc_id": "rLM1Ne",
+  "data": [
+    [
+      "3e3c08b5-7e5c-4189-9923-81933a256f54",
+      "Test Canary Notebook",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      [
+        ["note-uuid-canary-01", "Canary Architecture Notes", "Synthetic test note payload."]
+      ],
+      [
+        ["art-uuid-canary-02", "Canary Deep Dive Audio", 1, 2, "https://contribution.usercontent.google.com/download/canary"]
+      ],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  ]
+}

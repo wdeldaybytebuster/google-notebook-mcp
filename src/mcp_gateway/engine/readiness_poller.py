@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable
 from enum import IntEnum
 from typing import Any
 
+from mcp_gateway.engine.adapters import AdapterConfig
+
 
 class SourceStatus(IntEnum):
     """Ingestion state for a NotebookLM source.
@@ -44,7 +46,16 @@ def parse_source_status(source_row: list[Any]) -> SourceStatus:
         recognisable status value is found at any of the scanned indices.
     """
     _status_values = {s.value for s in SourceStatus if s != SourceStatus.UNKNOWN}
-    for idx in (3, 4, 5):
+    status_idx = int(
+        AdapterConfig.get_current_spec()
+        .rpc_descriptors.get("get_notebook_metadata", {})
+        .get("rows", {})
+        .get("source_catalog", {})
+        .get("fields", {})
+        .get("status", 3)
+    )
+    indices = [status_idx] + [i for i in (3, 4, 5) if i != status_idx]
+    for idx in indices:
         if idx >= len(source_row):
             continue
         candidate = source_row[idx]
